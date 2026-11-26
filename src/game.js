@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import { cardLabel, shuffle } from './cards.js';
-import { aiDecide, askModel, describeAction, positionLabels, quickReplies, shownName, sidelinePrompt } from './ai.js';
+import { aiDecide, askModel, describeAction, onUsage, positionLabels, quickReplies, shownName, sidelinePrompt } from './ai.js';
 import { historyRound, latestRound } from './rounds.js';
 
 const TALK_MEMORY = 300; // earlier-hand lines of table talk the AIs are shown (config: talkMemory)
@@ -77,6 +77,7 @@ export class Game extends EventEmitter {
     this.log = log;
     this.dataDir = dataDir;
     this.guests = this.loadGuests();
+    onUsage((e) => this.recordUsage(e));
     this.newGame();
     this.restore();
     this.ready = true;
@@ -171,6 +172,7 @@ export class Game extends EventEmitter {
       button: t.button,
       recent: this.recent,
       talk: this.talk,
+      stats: this.stats,
       status: this.status === 'gameOver' ? 'gameOver' : undefined,
       spectating: this.spectating || undefined,
       spectatePaused: this.spectatePaused || undefined,
@@ -231,6 +233,7 @@ export class Game extends EventEmitter {
       t.button = snap.button ?? t.button;
       this.gameId = snap.gameId ?? this.gameId;
       this.recent = snap.recent ?? [];
+      this.stats = snap.stats ?? {};
       this.talk = snap.talk ?? this.talkFromHistory(snap.gameId);
       this.handHistory = this.loadHandHistory(snap.gameId);
       if (t.handNo > 0) this.status = snap.status === 'gameOver' ? 'gameOver' : 'handOver';
@@ -296,7 +299,9 @@ export class Game extends EventEmitter {
     }
     this.resolveArt();
     table.on('action', ({ entry, player }) => {
-      if (this.table === table) this.sidelineTrigger(entry, player);
+      if (this.table !== table) return;
+      this.recordAction(entry, player);
+      this.sidelineTrigger(entry, player);
     });
     table.on('handEnd', ({ result }) => {
       if (this.table === table) this.sidelineAfterHand(result);
@@ -319,6 +324,7 @@ export class Game extends EventEmitter {
     this.thinking = null;
     this.recent = [];
     this.talk = [];
+    this.stats = {};
     this.handHistory = [];
     this.startStacks = {};
     this.lastResult = null;
@@ -337,6 +343,53 @@ export class Game extends EventEmitter {
 
   changed() {
     this.emit('change');
+  }
+
+  // ---------------------------------------------------------------- per-character stats for the whole game
+  statFor(p) {
+    const id = p.id ?? p.name;
+    return (this.stats[id] ??= {
+      id,
+      name: p.name,
+      model: p.model ?? null,
+      kind: p.kind ?? 'ai',
+      calls: 0,
+      failedCalls: 0,
+      callMs: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cached: 0 },
+      byPurpose: {},
+      decisions: 0,
+      thinkMs: 0,
+      toolCalls: {},
+      historyHands: 0,
+      fallbacks: 0,
+      actions: {},
+      says: 0,
+      emotes: 0,
+      sideline: 0,
+    });
+  }
+
+  recordUsage({ player, purpose, usage, ms, ok }) {
+    if (!player) return;
+    const seat = this.table.players.find((p) => p.id === player.id);
+    const st = this.statFor(seat ?? { id: player.id, name: player.name, model: player.model, kind: 'helper' });
+    st.calls++;
+    if (!ok) st.failedCalls++;
+    st.callMs += ms ?? 0;
+    for (const k of Object.keys(st.tokens)) st.tokens[k] += usage?.[k] ?? 0;
+    const b = (st.byPurpose[purpose] ??= { calls: 0, input: 0, output: 0 });
+    b.calls++;
+    b.input += usage?.input ?? 0;
+    b.output += usage?.output ?? 0;
+  }
+
+  recordAction(entry, player) {
+    const st = this.statFor(player);
+    if (entry.action !== 'chat') st.actions[entry.action] = (st.actions[entry.action] ?? 0) + 1;
+    if (entry.say) st.says++;
+    if (entry.emote) st.emotes++;
+    if (entry.sideline) st.sideline++;
   }
 
   // ---------------------------------------------------------------- 场外互动
@@ -409,7 +462,7 @@ export class Game extends EventEmitter {
     const handNo = this.table.hand?.no;
     try {
       const view = this.table.viewFor(p);
-      const d = await askModel({ ...this.config.llm, timeoutMs: 20000 }, p, sidelinePrompt(p, view, why + (mustAnswer ? '（有人在叫你，最好回一句）' : '')), this.table.players.length);
+      const d = await askModel({ ...this.config.llm, timeoutMs: 20000 }, { ...p, purpose: 'sideline' }, sidelinePrompt(p, view, why + (mustAnswer ? '（有人在叫你，最好回一句）' : '')), this.table.players.length);
       const say = typeof d.say === 'string' ? d.say.trim().slice(0, 60) : '';
       const emote = typeof d.emote === 'string' && p.stickers?.some((s) => s.id === d.emote) ? d.emote : undefined;
       // Too late once the next hand has started.
@@ -496,11 +549,13 @@ export class Game extends EventEmitter {
     const minDelay = sleep(this.config.minActionDelayMs ?? 600);
     const earlier = this.talk.filter((t) => t.hand < view.handNo);
     // The AI looks the table up itself (function calling); config aiTools: false puts everything in the prompt instead.
+    let latestSeen = 0;
     const run =
       this.config.aiTools === false
         ? null
         : {
-            get_latest_round: () => latestRound(this.table.viewFor(p), p, legal, this.startStacks),
+            // Repeat calls within one decision get a short note instead of the same JSON again (saves tokens).
+            get_latest_round: () => (latestSeen++ ? { note: '和刚才返回的一样：这次决策期间牌局没有变化，请直接根据上一次的结果决定。' } : latestRound(this.table.viewFor(p), p, legal, this.startStacks)),
             get_history_rounds: ({ count } = {}) => {
               const all = this.handHistory.filter((r) => r.hand < view.handNo);
               const n = Math.max(1, Math.min(all.length, Math.floor(Number(count) || 1)));
@@ -508,6 +563,16 @@ export class Game extends EventEmitter {
             },
           };
     const d = await aiDecide(this.config.llm, p, legal, view, this.recent.slice(-5), this.log, earlier, run);
+    const st = this.statFor(p);
+    st.decisions++;
+    st.thinkMs += d.ms ?? 0;
+    if (d.fallback) st.fallbacks++;
+    for (const t of d.tools ?? []) {
+      const name = t.replace(/\(.*$/, '');
+      st.toolCalls[name] = (st.toolCalls[name] ?? 0) + 1;
+      const n = Number(/\((\d+)\)/.exec(t)?.[1]);
+      if (n) st.historyHands += n;
+    }
     await minDelay;
     this.thinking = null;
     return d;
@@ -1020,6 +1085,7 @@ export class Game extends EventEmitter {
   }
 
   async askTwice(cfg, player, prompt, tableSize) {
+    player = { ...player, purpose: 'lines' };
     try {
       return await askModel(cfg, player, prompt, tableSize);
     } catch (e) {
@@ -1055,6 +1121,7 @@ export class Game extends EventEmitter {
       handNo: t.handNo,
       smallBlind: t.smallBlind,
       serverNow: Date.now(),
+      stats: Object.values(this.stats ?? {}),
       scene: this.sceneArt(),
       blindLevel: this.blinds?.level ?? 1,
       autoNextHandMs: this.config.autoNextHandMs ?? 0,

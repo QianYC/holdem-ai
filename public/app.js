@@ -196,6 +196,7 @@ function render(s) {
 
   renderLan(s);
   renderStart(s);
+  if (!$('statsModal').classList.contains('hidden')) renderStats(s);
   renderControls(s);
   renderChat(s);
   renderLog(s);
@@ -520,6 +521,7 @@ function renderOver(s) {
         <div class="standings">${standings}</div>
         <div class="actions">
           <button class="ghost" id="overClose">${personal ? '继续观看牌局' : '看看牌桌'}</button>
+          <button class="ghost" id="overStats">📊 本局统计</button>
           ${spectateBtn}
           ${s.isHost && !personal ? `<button class="pink" id="overAgain">${defeat ? '💗 乖乖认输，再来一局' : '💗 再来一局'}</button>` : ''}
         </div>
@@ -567,6 +569,11 @@ function renderOver(s) {
       renderOver(S);
     };
     if ($('overAgain')) $('overAgain').onclick = newGameAndDeal;
+    if ($('overStats'))
+      $('overStats').onclick = () => {
+        $('statsModal').classList.remove('hidden');
+        renderStats(S);
+      };
     if ($('overSpectate')) {
       $('overSpectate').onclick = () => {
         overDismissed = key;
@@ -802,6 +809,63 @@ $('lineupBtn').onclick = () => {
   renderStart(S);
 };
 
+// ---------------------------------------------------------------- per-character stats
+const k = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1e4 ? `${(n / 1e3).toFixed(1)}k` : fmt(n ?? 0));
+const PURPOSE = { decide: '打牌决策', sideline: '场外互动', lines: '结算台词', quick: '快速发言' };
+function renderStats(s) {
+  const rows = (s.stats ?? []).slice();
+  const byId = new Map(s.players.map((p) => [p.id ?? p.name, p]));
+  const tot = (r) => r.tokens.input + r.tokens.output;
+  rows.sort((a, b) => (a.kind === 'human') - (b.kind === 'human') || tot(b) - tot(a));
+  const max = Math.max(1, ...rows.map(tot));
+  const sum = rows.reduce(
+    (a, r) => {
+      for (const x of ['input', 'output', 'reasoning', 'cached']) a.tokens[x] += r.tokens[x];
+      a.calls += r.calls;
+      a.decisions += r.decisions;
+      a.tools += Object.values(r.toolCalls).reduce((x, y) => x + y, 0);
+      return a;
+    },
+    { tokens: { input: 0, output: 0, reasoning: 0, cached: 0 }, calls: 0, decisions: 0, tools: 0 },
+  );
+  const acts = (a) => ['fold', 'check', 'call', 'raise'].map((x) => a[x] ?? 0).join(' / ');
+  const tools = (t) => (t.get_latest_round || t.get_history_rounds ? `${t.get_latest_round ?? 0} / ${t.get_history_rounds ?? 0}` : '—');
+  const row = (r) => {
+    const p = [...byId.values()].find((x) => x.name === r.name);
+    const human = r.kind === 'human';
+    const purposes = Object.entries(r.byPurpose ?? {})
+      .map(([key, v]) => `${PURPOSE[key] ?? key}：${v.calls} 次，输入 ${fmt(v.input)} / 输出 ${fmt(v.output)}`)
+      .join('\n');
+    return `<tr class="${human ? 'human' : ''}">
+      <td class="who"><span class="dot" style="background:${p?.color ?? (human ? '#388bfd' : '#8b949e')}"></span><b>${esc(r.kind === 'human' && r.id === 'human' ? '你' : r.name)}</b><small>${esc(r.model ?? (human ? '真人' : ''))}</small></td>
+      <td class="num">${human ? '—' : r.decisions}</td>
+      <td class="num" title="${esc(purposes)}">${human ? '—' : `${r.calls}${r.failedCalls ? ` <span class="bad">(${r.failedCalls} 失败)</span>` : ''}`}</td>
+      <td class="num" title="查本手 / 查历史（共看了 ${r.historyHands} 手）">${human ? '—' : tools(r.toolCalls)}</td>
+      <td class="num">${human ? '—' : k(r.tokens.input)}${r.tokens.cached ? `<small>缓存 ${k(r.tokens.cached)}</small>` : ''}</td>
+      <td class="num">${human ? '—' : k(r.tokens.output)}${r.tokens.reasoning ? `<small>思考 ${k(r.tokens.reasoning)}</small>` : ''}</td>
+      <td class="bar">${human ? '' : `<div style="width:${(tot(r) / max) * 100}%;background:${p?.color ?? '#58a6ff'}"></div>`}</td>
+      <td class="num">${human || !r.decisions ? '—' : `${(r.thinkMs / r.decisions / 1000).toFixed(1)}s`}</td>
+      <td class="num">${human ? '—' : r.fallbacks || 0}</td>
+      <td class="num">${acts(r.actions)}</td>
+      <td class="num">${r.says} / ${r.emotes} / ${r.sideline}</td>
+    </tr>`;
+  };
+  $('statsSub').textContent = ` · 第 ${s.handNo} 手 · ${rows.filter((r) => r.kind === 'ai').length} 个 AI · 共 ${fmt(sum.calls)} 次模型调用、${k(sum.tokens.input + sum.tokens.output)} tokens`;
+  $('statsBody').innerHTML = rows.length
+    ? `<table class="stats">
+      <tr><th>角色</th><th>决策</th><th>模型调用</th><th>工具<br><small>本手/历史</small></th><th>输入 tokens</th><th>输出 tokens</th><th></th><th>平均思考</th><th>托管</th><th>弃/过/跟/加</th><th>发言/表情/场外</th></tr>
+      ${rows.map(row).join('')}
+      <tr class="total"><td><b>合计</b></td><td class="num">${sum.decisions}</td><td class="num">${sum.calls}</td><td class="num">${sum.tools}</td><td class="num">${k(sum.tokens.input)}<small>缓存 ${k(sum.tokens.cached)}</small></td><td class="num">${k(sum.tokens.output)}${sum.tokens.reasoning ? `<small>思考 ${k(sum.tokens.reasoning)}</small>` : ''}</td><td></td><td></td><td></td><td></td><td></td></tr>
+    </table>
+    <p class="snote">「模型调用」是和模型的往返次数（一次决策里每调用一轮工具就多一轮），鼠标移上去能看到按用途拆分：打牌决策、场外互动、结算台词。统计从这一局开始累计，开新局清零。</p>`
+    : '<p class="muted">这一局还没有数据，打几手再来看。</p>';
+}
+$('statsBtn').onclick = () => {
+  $('statsModal').classList.remove('hidden');
+  renderStats(S);
+};
+$('statsClose').onclick = () => $('statsModal').classList.add('hidden');
+
 // ---------------------------------------------------------------- LAN: host panel, join dialog
 let joinAsked = false;
 function renderLan(s) {
@@ -889,6 +953,7 @@ $('settingsBtn').onclick = () => openSettings();
 {
   const sp = new URLSearchParams(location.search);
   if (sp.has('settings')) openSettings(sp.get('settings') || 'game', sp.get('open'));
+  if (sp.has('stats')) setTimeout(() => $('statsBtn').click(), 300);
 }
 
 $('newGameBtn').onclick = () => {

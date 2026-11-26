@@ -631,3 +631,21 @@ aside .panel:first-child { flex: 1 1 auto; min-height: 160px; display: flex; fle
 .scene-tip .nm { filter: brightness(1.6) saturate(1.2); text-shadow: 0 1px 6px rgba(0, 0, 0, .6); }
 .side-tag { font-size: 10px; padding: 0 5px; border-radius: 6px; background: rgba(121, 192, 255, .15); color: #79c0ff; border: 1px solid rgba(121, 192, 255, .35); }
 .chatline.sideline { opacity: .92; }
+
+/* ---------- stats ---------- */
+#statsModal { z-index: 70; }
+.mpanel.wide { width: min(1300px, 97vw); height: auto; max-height: 92vh; }
+table.stats { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.stats th { text-align: right; font-weight: 600; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table.stats th:first-child { text-align: left; }
+table.stats td { padding: 7px 8px; border-bottom: 1px solid rgba(255, 255, 255, .05); vertical-align: middle; }
+table.stats td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+table.stats td small { display: block; font-size: 10px; color: var(--muted); }
+table.stats td.who { white-space: nowrap; }
+table.stats td.who small { display: inline; margin-left: 6px; }
+table.stats .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+table.stats td.bar { width: 14%; min-width: 80px; }
+table.stats td.bar div { height: 8px; border-radius: 4px; opacity: .85; }
+table.stats tr.human td { color: #c9d1d9; }
+table.stats tr.total td { border-top: 1px solid var(--line); font-weight: 600; }
+table.stats .bad { color: #f85149; }

@@ -58,6 +58,29 @@ export async function listModels(cfg, route) {
   return (body.data ?? body.models ?? []).map((m) => m.id ?? m.name).filter(Boolean).sort();
 }
 
+// ---------------------------------------------------------------- usage reporting (for per-character stats)
+// Every model call reports { player, purpose, usage: { input, output, reasoning, cached }, ms, ok }.
+let usageListener = null;
+export function onUsage(fn) {
+  usageListener = fn;
+}
+function normUsage(u = {}) {
+  const cacheRead = u.input_tokens_details?.cached_tokens ?? u.prompt_tokens_details?.cached_tokens ?? u.cache_read_input_tokens ?? 0;
+  // Messages API: input_tokens excludes cache reads/writes.
+  const input = (u.input_tokens ?? u.prompt_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+  return {
+    input,
+    output: u.output_tokens ?? u.completion_tokens ?? 0,
+    reasoning: u.output_tokens_details?.reasoning_tokens ?? u.completion_tokens_details?.reasoning_tokens ?? 0,
+    cached: cacheRead,
+  };
+}
+function report(player, body, ms, ok = true) {
+  try {
+    usageListener?.({ player, purpose: player?.purpose ?? 'decide', usage: normUsage(body?.usage), ms, ok });
+  } catch {}
+}
+
 export function firstJsonObject(text) {
   const s = String(text ?? '');
   for (let start = s.indexOf('{'); start >= 0; start = s.indexOf('{', start + 1)) {
@@ -186,7 +209,9 @@ export async function quickReplies(cfg, model, human, legal, view) {
     signal: AbortSignal.timeout(20000),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const d = firstJsonObject(outputText(await res.json())) ?? {};
+  const quickBody = await res.json();
+  report({ id: 'quick-replies', name: '快速发言', model, purpose: 'quick' }, quickBody, 0);
+  const d = firstJsonObject(outputText(quickBody)) ?? {};
   return QUICK_STYLES.map((s) => ({ style: s.style, label: s.label, text: typeof d[s.style] === 'string' ? d[s.style].trim().slice(0, 40) : '' })).filter((x) => x.text);
 }
 
@@ -304,6 +329,7 @@ export const ROUND_TOOLS = [
 ];
 
 async function callResponses(cfg, player, body) {
+  const t0 = Date.now();
   const route = routeOf(cfg, player);
   const res = await fetch(`${route.baseUrl.replace(/\/$/, '')}/responses`, {
     method: 'POST',
@@ -311,12 +337,18 @@ async function callResponses(cfg, player, body) {
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(player.timeoutMs ?? cfg.timeoutMs ?? 45000),
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  return res.json();
+  if (!res.ok) {
+    report(player, null, Date.now() - t0, false);
+    throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  }
+  const json = await res.json();
+  report(player, json, Date.now() - t0);
+  return json;
 }
 
 // Function-calling loop: the model may call the round tools (handlers in `run`) before answering.
 async function callMessages(cfg, route, player, body) {
+  const t0 = Date.now();
   const res = await fetch(`${route.baseUrl.replace(/\/$/, '')}/v1/messages`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...routeHeaders(cfg, route) },
@@ -324,8 +356,13 @@ async function callMessages(cfg, route, player, body) {
     redirect: 'error',
     signal: AbortSignal.timeout(player.timeoutMs ?? cfg.timeoutMs ?? 45000),
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  return res.json();
+  if (!res.ok) {
+    report(player, null, Date.now() - t0, false);
+    throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  }
+  const json = await res.json();
+  report(player, json, Date.now() - t0);
+  return json;
 }
 
 // Anthropic Messages version of the loop (tool_use / tool_result blocks; thinking blocks are passed back as-is).

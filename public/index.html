@@ -12,6 +12,7 @@
     <div class="meta" id="meta"></div>
     <div class="tools">
       <button id="lineupBtn" class="ghost" title="开始页：全部角色">🎴 阵容</button>
+      <button id="statsBtn" class="ghost" title="本局统计">📊 统计</button>
       <button id="lanChip" class="ghost hidden" title="局域网"></button>
       <button id="bgmBtn" class="ghost" title="背景音乐开关（首次需要点一下页面）">🎵 BGM</button>
       <input id="volume" type="range" min="0" max="1" step="0.05" title="音量">
@@ -58,6 +59,13 @@
   </main>
   <div id="start" class="start hidden"></div>
   <div id="over" class="over hidden"></div>
+  <div id="statsModal" class="modal hidden">
+    <div class="mpanel wide">
+      <div class="mhead"><b>📊 本局统计</b><span id="statsSub" class="muted"></span></div>
+      <div id="statsBody" class="mbody"></div>
+      <div class="mfoot"><span class="muted">token 数来自各模型接口返回的 usage；DeepSeek 的思考 token 计入输出、不单独拆分。</span><button type="button" id="statsClose" class="ghost">关闭</button></div>
+    </div>
+  </div>
   <div id="lanModal" class="modal hidden">
     <div class="mpanel small">
       <div class="mhead"><b id="lanTitle">📶 局域网</b></div>
