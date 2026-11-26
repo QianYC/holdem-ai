@@ -881,6 +881,7 @@ export class Game extends EventEmitter {
         winPortrait: p.media?.win,
         losePortrait: p.media?.lose,
         portraitPos: p.portraitPos,
+        persona: p.kind === 'ai' ? p.persona : undefined,
         faceFocus: p.faceFocus,
         portraitCredit: p.portraitCredit,
         portraitUrl: p.portraitUrl,

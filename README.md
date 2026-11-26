@@ -4,6 +4,8 @@
 
 *A local No-Limit Texas Hold'em game: you vs a table of LLM-driven characters (1–9, any models), with personas, table talk, stickers, elimination screens, procedural BGM and optional Slack play.*
 
+![开始页](docs/start.png)
+
 ![牌桌](docs/table.png)
 
 | 被 AI 淘汰 | 淘汰一个 AI |
@@ -29,6 +31,7 @@
 ## ✨ 特色
 
 - **一桌大模型**：默认 7 个角色——Claude Opus / Sonnet / Haiku、GPT-6.2 Sol、GPT-6.1 Terra、GPT-6.2 Astra、Grok 4.7。AI 数量（1–9）、模型、名字、人设、形象、表情全部可配置；任何 OpenAI Responses API 兼容的模型都能上桌，**同一个模型也可以扮演多个不同角色**（每个角色每次决策都是独立的请求，互不共享上下文）。
+- **开始页**：开局前展示全部角色的立绘、称号和模型，鼠标移上去看人设；随时可以点「🎴 阵容」再看。
 - **设置界面**：网页右上角「⚙ 设置」——改规则、增删 AI、换模型、写人设、上传或一键生成立绘 / 胜负姿势 / 表情包，保存即写入 `config.json`。
 - **盲注逐级上涨**：锦标赛结构，默认每 10 手升一级（10/20 → 15/30 → 20/40 → …），级别和下次升盲显示在页面顶部。
 - **完整的无限注规则**：盲注、按钮轮转、最小加注、不完整全下不重开加注、多重边池、余码分配、单挑规则，配单元测试和随机对局的筹码守恒测试。

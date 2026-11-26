@@ -195,6 +195,7 @@ function render(s) {
   $('banner').innerHTML = banner;
 
   renderLan(s);
+  renderStart(s);
   renderControls(s);
   renderChat(s);
   renderLog(s);
@@ -610,6 +611,78 @@ $('bgmBtn').onclick = (e) => {
 $('volume').value = String(audio.volume);
 $('volume').oninput = (e) => audio.setVolume(Number(e.target.value));
 updateBgmButton();
+
+// ---------------------------------------------------------------- start page: the whole cast
+// Shown automatically before the first hand of a game, and any time from the 🎴 阵容 button.
+let startManual = false;
+let startClosedFor = null;
+let startKey = null;
+function renderStart(s) {
+  const el = $('start');
+  const fresh = s.status === 'ready' && s.handNo === 0 && startClosedFor !== s.gameId;
+  const show = startManual || fresh;
+  if (!show) {
+    el.classList.add('hidden');
+    startKey = null;
+    return;
+  }
+  const ais = s.players.filter((p) => p.kind === 'ai');
+  const humans = s.players.filter((p) => p.kind === 'human');
+  const key = JSON.stringify([s.gameId, s.status, s.isHost, s.lan?.joined, s.you, s.players.map((p) => [p.name, p.portrait, p.model, p.title])]);
+  el.classList.remove('hidden');
+  if (key === startKey) return;
+  startKey = key;
+  const card = (p, i) => {
+    const art = p.portrait
+      ? `<img src="${esc(p.portrait)}" alt="" style="object-position:${esc(p.portraitPos ?? '50% 0%')}">`
+      : `<span class="emoji">${p.avatar ?? '🤖'}</span>`;
+    return `<div class="cast" style="--c:${p.color ?? '#58a6ff'};animation-delay:${i * 90}ms" tabindex="0">
+      <div class="art">${art}</div>
+      <div class="info">
+        <div class="nm">${esc(p.name)}</div>
+        <div class="tt">${esc(p.title ?? '')}</div>
+        <div class="md">${esc(p.model ?? '')}</div>
+        ${p.persona ? `<div class="ps">${esc(p.persona)}</div>` : ''}
+      </div>
+    </div>`;
+  };
+  const playing = s.status !== 'ready' || s.handNo > 0;
+  const blinds = `起始筹码 ${fmt(s.startingStack)} · 盲注 ${s.smallBlind}/${s.bigBlind}${s.blindsNext || s.handNo === 0 ? ' · 逐级升盲' : ''} · ${s.eliminationMode ? '淘汰赛' : '现金桌'}`;
+  const mainBtn = s.isHost
+    ? playing
+      ? '<button class="primary" id="startBack">↩ 返回牌桌</button>'
+      : '<button class="gold big" id="startGo">▶ 开始游戏</button>'
+    : s.lan?.joined || s.you >= 0
+      ? '<button class="primary" id="startBack">↩ 进入牌桌</button>'
+      : '<button class="gold big" id="startJoin">🙋 加入牌桌</button><button class="ghost" id="startBack">先旁观</button>';
+  el.innerHTML = `
+    <div class="start-inner">
+      <div class="start-title">♠♥ 德州扑克 ♦♣</div>
+      <div class="start-sub">${humans.length > 1 ? `${humans.length} 位真人` : '你'} vs ${ais.length} 个 AI · ${blinds}</div>
+      <div class="cast-grid">${ais.map(card).join('')}</div>
+      ${humans.length > 1 ? `<div class="start-humans">真人玩家：${humans.map((p) => esc(nameOf(p))).join('、')}</div>` : ''}
+      <div class="start-actions">${mainBtn}${s.isHost ? '<button class="ghost" id="startSettings">⚙ 设置阵容</button>' : ''}</div>
+      <div class="start-hint">把鼠标移到角色上可以看人设</div>
+    </div>`;
+  const close = () => {
+    startManual = false;
+    startClosedFor = s.gameId;
+    renderStart(S);
+  };
+  if ($('startGo'))
+    $('startGo').onclick = () => {
+      close();
+      post('/api/next');
+    };
+  if ($('startBack')) $('startBack').onclick = close;
+  if ($('startJoin')) $('startJoin').onclick = () => openJoin(true);
+  if ($('startSettings')) $('startSettings').onclick = () => openSettings('ai');
+}
+$('lineupBtn').onclick = () => {
+  startManual = true;
+  startKey = null;
+  renderStart(S);
+};
 
 // ---------------------------------------------------------------- LAN: host panel, join dialog
 let joinAsked = false;
