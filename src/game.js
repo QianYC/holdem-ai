@@ -386,9 +386,10 @@ export class Game extends EventEmitter {
   scheduleAutoNext() {
     clearTimeout(this.autoTimer);
     this.autoNextAt = null;
-    const ms = this.spectating ? (this.spectatePaused ? 0 : (this.config.spectateDelayMs ?? 3000)) : (this.config.autoNextHandMs ?? 0);
-    // A knockout screen waits for you; so does a busted human (game over).
-    if (!ms || this.status !== 'handOver' || (!this.spectating && (this.knockout || this.human.stack <= 0))) return;
+    let ms = this.spectating ? (this.spectatePaused ? 0 : (this.config.spectateDelayMs ?? 3000)) : (this.config.autoNextHandMs ?? 0);
+    if (!ms || this.status !== 'handOver' || (!this.spectating && this.human.stack <= 0)) return;
+    // Leave time to read a defeat screen before the next hand starts.
+    if (this.knockout) ms = Math.max(ms, this.config.knockoutDelayMs ?? 12000);
     const no = this.table.handNo;
     this.autoNextAt = Date.now() + ms;
     this.autoTimer = setTimeout(() => {
@@ -488,7 +489,9 @@ export class Game extends EventEmitter {
       this.log(`[game] ${p.name} eliminated in hand ${h.no}, place ${p.place}, by ${t.players[p.eliminatedBy]?.name}`);
     });
     const me = this.human;
-    for (const p of busted) if (p.kind === 'ai' && p.eliminatedBy === 0) this.knockOut(p);
+    // One defeat screen per hand: prefer the AI you knocked out yourself.
+    const shown = busted.filter((p) => p.kind === 'ai').sort((a, b) => (a.eliminatedBy === 0 ? -1 : 0) - (b.eliminatedBy === 0 ? -1 : 0))[0];
+    if (shown && !busted.includes(me) && remaining > 1) this.knockOut(shown);
     if (busted.includes(me)) this.finish('defeat');
     else if (remaining === 1 && me.stack > 0) {
       me.place = 1;
@@ -524,18 +527,21 @@ export class Game extends EventEmitter {
     return { ok: true };
   }
 
-  // An AI you just knocked out gets its own defeat screen (the game goes on).
+  // Every AI that busts gets its own defeat screen (the game goes on). `by` is the seat that took her last chips.
   knockOut(p) {
     const h = this.table.hand;
     const reveal = (seat) => this.lastResult?.reveals?.find((r) => r.seat === seat);
+    const by = p.eliminatedBy ?? 0;
     const k = {
       seat: p.seat,
+      by,
+      byHuman: by === 0,
       handNo: h.no,
       place: p.place,
       players: this.table.players.length,
       style: this.config.defeatStyle === 'classic' ? 'classic' : 'flirty',
-      myHole: this.human.hole.slice(),
-      myHand: reveal(0)?.hand ?? null,
+      myHole: reveal(by)?.hole ?? (by === 0 ? this.human.hole.slice() : null),
+      myHand: reveal(by)?.hand ?? null,
       theirHole: reveal(p.seat)?.hole ?? null,
       theirHand: reveal(p.seat)?.hand ?? null,
       board: h.board.slice(),
@@ -554,25 +560,32 @@ export class Game extends EventEmitter {
 
   async fetchKnockoutLine(p, k) {
     const flirty = k.style === 'flirty';
-    const fallback = flirty
-      ? { line: '呜……居然输给你了。这次、这次只是手滑而已！', reward: '奖励你：下次见面我先打招呼。' }
-      : { line: '这把算你狠，下一局我会回来的。' };
+    const winner = this.table.players[k.by];
+    const fallback = k.byHuman
+      ? flirty
+        ? { line: '呜……居然输给你了。这次、这次只是手滑而已！', reward: '奖励你：下次见面我先打招呼。' }
+        : { line: '这把算你狠，下一局我会回来的。' }
+      : { line: `${winner?.name ?? '你'}……给我记住，下一局一定讨回来！` };
     if (!p.model) return fallback;
     const cards = (cs) => (cs?.length ? cs.map(cardLabel).join(' ') : '未亮牌');
     const role = p.persona ? `你的角色形象（${p.title ?? p.name}）：${p.persona}\n` : '';
-    const situation = `德州扑克淘汰赛第 ${k.handNo} 手，你（${p.name}）被人类玩家打到筹码归零，淘汰出局，最终第 ${k.place} 名。你的牌 ${cards(k.theirHole)}${k.theirHand ? `（${k.theirHand}）` : ''}，对方的牌 ${cards(k.myHole)}${k.myHand ? `（${k.myHand}）` : ''}，公共牌 ${cards(k.board)}。`;
-    const ask = flirty
-      ? '这是你的战败画面。用你的人设说一句不甘心、害羞又带点暧昧的认输台词（中文，40 字以内），再给赢了你的人类一个俏皮的小奖励（中文，30 字以内）。可以调情，但不要露骨，不涉及性行为或裸露。'
-      : '说一句不服气但有风度的告别台词，中文，40 字以内。';
+    const who = k.byHuman ? '人类玩家' : `${winner?.name}${winner?.title ? `（${winner.title}）` : ''}`;
+    const situation = `德州扑克淘汰赛第 ${k.handNo} 手，你（${p.name}）被${who}打到筹码归零，淘汰出局，最终第 ${k.place} 名。你的牌 ${cards(k.theirHole)}${k.theirHand ? `（${k.theirHand}）` : ''}，对方的牌 ${cards(k.myHole)}${k.myHand ? `（${k.myHand}）` : ''}，公共牌 ${cards(k.board)}。`;
+    const ask = !k.byHuman
+      ? `这是你的战败画面，人类玩家在一旁看着。用你的人设说一句不甘心又带点羞恼的出局台词（中文，40 字以内），可以冲着淘汰你的${winner?.name ?? '对手'}放句狠话，也可以对观战的人类撒个娇。可以调情，但不要露骨，不涉及性行为或裸露。`
+      : flirty
+        ? '这是你的战败画面。用你的人设说一句不甘心、害羞又带点暧昧的认输台词（中文，40 字以内），再给赢了你的人类一个俏皮的小奖励（中文，30 字以内）。可以调情，但不要露骨，不涉及性行为或裸露。'
+        : '说一句不服气但有风度的告别台词，中文，40 字以内。';
+    const withReward = flirty && k.byHuman;
     try {
       const d = await this.askTwice(
         { ...this.config.llm, timeoutMs: 25000 },
         p,
-        `${role}${situation}${ask}\n只输出 JSON：${flirty ? '{"say": "...", "reward": "..."}' : '{"say": "..."}'}`,
+        `${role}${situation}${ask}\n只输出 JSON：${withReward ? '{"say": "...", "reward": "..."}' : '{"say": "..."}'}`,
         this.table.players.length,
       );
       const clean = (x, n) => (typeof x === 'string' && x.trim() ? x.trim().slice(0, n) : null);
-      return { line: clean(d.say, 80) ?? fallback.line, reward: flirty ? (clean(d.reward, 60) ?? fallback.reward) : undefined };
+      return { line: clean(d.say, 80) ?? fallback.line, reward: withReward ? (clean(d.reward, 60) ?? fallback.reward) : undefined };
     } catch (e) {
       this.log(`[game] knockout line failed: ${e?.message ?? e}`);
       return fallback;

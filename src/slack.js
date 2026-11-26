@@ -402,8 +402,12 @@ export class SlackMirror {
     const s = this.game.state();
     const p = s.players[k.seat];
     const who = `${p.name}${p.title ? `（${p.title}）` : ''}`;
-    const head = `💔 *${who} 被你送出了牌桌！*  第 ${k.handNo} 手出局，第 ${k.place} / ${k.players} 名`;
-    const showdown = k.theirHole ? `\n你 ${cards(k.myHole)}${k.myHand ? ` ${k.myHand}` : ''}  vs  ${p.name} ${cards(k.theirHole)}${k.theirHand ? ` ${k.theirHand}` : ''}\n公共牌 ${cards(k.board)}` : '';
+    const winner = s.players[k.by ?? 0];
+    const byHuman = k.byHuman !== false;
+    const head = byHuman
+      ? `💔 *${who} 被你送出了牌桌！*  第 ${k.handNo} 手出局，第 ${k.place} / ${k.players} 名`
+      : `💔 *${who} 出局了* —— 被 *${winner?.name ?? '对手'}* 淘汰，第 ${k.handNo} 手，第 ${k.place} / ${k.players} 名`;
+    const showdown = k.theirHole ? `\n${byHuman ? '你' : (winner?.name ?? '')} ${cards(k.myHole)}${k.myHand ? ` ${k.myHand}` : ''}  vs  ${p.name} ${cards(k.theirHole)}${k.theirHand ? ` ${k.theirHand}` : ''}\n公共牌 ${cards(k.board)}` : '';
     const quote = k.line ? `\n\n${p.avatar ?? '🤖'} *${p.name}*：_「${k.line}」_` : '';
     const reward = k.reward ? `\n🎁 *胜者奖励*：${k.reward}` : '';
     const text = `${head}${showdown}${quote}${reward}`;

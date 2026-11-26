@@ -190,9 +190,10 @@ let countdown = null;
 function startCountdown(at) {
   clearInterval(countdown);
   countdown = setInterval(() => {
-    const el = $('autoLeft');
-    if (!el) return clearInterval(countdown);
-    el.textContent = String(Math.max(0, Math.ceil((at - Date.now()) / 1000)));
+    const els = document.querySelectorAll('.autoLeft');
+    if (!els.length) return clearInterval(countdown);
+    for (const el of els) el.textContent = String(Math.max(0, Math.ceil((at - Date.now()) / 1000)));
+
   }, 250);
 }
 
@@ -238,7 +239,7 @@ function renderControls(s) {
       };
     } else {
       const left = s.autoNextAt ? Math.max(0, Math.ceil((s.autoNextAt - Date.now()) / 1000)) : null;
-      c.innerHTML = `<div class="info">${s.status === 'ready' ? `${s.players.length} 人桌，你的筹码 <b>${fmt(me.stack)}</b>。` : `这一手结束了。${left != null ? `<span id="autoLeft">${left}</span> 秒后自动发下一手` : ''}`}</div>${autoNextToggle(s)}<button class="primary" id="nextBtn">${s.status === 'ready' ? '开始' : '下一手 ▶'}</button>`;
+      c.innerHTML = `<div class="info">${s.status === 'ready' ? `${s.players.length} 人桌，你的筹码 <b>${fmt(me.stack)}</b>。` : `这一手结束了。${left != null ? `<span class="autoLeft">${left}</span> 秒后自动发下一手` : ''}`}</div>${autoNextToggle(s)}<button class="primary" id="nextBtn">${s.status === 'ready' ? '开始' : '下一手 ▶'}</button>`;
       $('nextBtn').onclick = () => post('/api/next');
       if (left != null) startCountdown(s.autoNextAt);
     }
@@ -371,6 +372,10 @@ function renderKnockout(s) {
     ? `<img src="${esc(pose)}" alt="" style="object-position:${esc(p.losePortrait ? '50% 30%' : (p.portraitPos ?? '50% 0%'))}">`
     : `<span class="emoji">${p.avatar ?? '🤖'}</span>`;
   const alive = s.players.filter((x) => x.stack > 0).length;
+  const byHuman = k.byHuman !== false;
+  const winner = s.players[k.by ?? 0];
+  const winnerName = byHuman ? '你' : esc(winner?.name ?? '对手');
+  const left = s.autoNextAt ? Math.max(0, Math.ceil((s.autoNextAt - Date.now()) / 1000)) : null;
   const html = `
     <div class="box flirty-box ko-box">
       <div class="card-portrait knocked" style="--c:${p.color ?? '#e0559b'}">
@@ -381,14 +386,14 @@ function renderKnockout(s) {
         <div class="md">${esc(p.model ?? '')}${p.portraitCredit && pose ? ` · ${esc(p.portraitCredit)}` : ''}</div>
       </div>
       <div class="side-text">
-        <div class="title">${esc(p.name)} 被你拿下了♡</div>
-        <div class="subtitle">第 ${k.handNo} 手筹码归零出局 · 第 ${k.place} / ${k.players} 名 · 场上还剩 ${alive} 人</div>
+        <div class="title">${byHuman ? `${esc(p.name)} 被你拿下了♡` : `${esc(p.name)} 出局了…`}</div>
+        <div class="subtitle">${byHuman ? '' : `被 <b style="color:${winner?.color ?? '#fff'}">${winnerName}</b> 淘汰 · `}第 ${k.handNo} 手筹码归零 · 第 ${k.place} / ${k.players} 名 · 场上还剩 ${alive} 人</div>
         <div class="bubble-big">${k.line ? `「${esc(k.line)}」` : '<span class="thinking-dots">她正红着脸组织语言</span>'}</div>
         ${k.reward ? `<div class="penalty"><span>🎁 胜者奖励</span>${esc(k.reward)}</div>` : ''}
         ${
           k.theirHole
             ? `<div class="showdown mini"><div class="cards">${cards(k.myHole)}</div><span class="vs">vs</span><div class="cards">${cards(k.theirHole)}</div><span class="vs">·</span><div class="cards">${cards(k.board)}</div></div>
-               <div class="mini-stats">你 <b>${esc(k.myHand ?? '')}</b> 赢了她的 <b>${esc(k.theirHand ?? '')}</b></div>`
+               <div class="mini-stats">${winnerName} <b>${esc(k.myHand ?? '')}</b> 赢了她的 <b>${esc(k.theirHand ?? '')}</b>${left != null ? ` · <span class="autoLeft">${left}</span> 秒后自动继续` : ''}</div>`
             : ''
         }
         <div class="actions">
@@ -403,6 +408,7 @@ function renderKnockout(s) {
     el.className = 'over flirty';
     if (overShownKey !== key) rain(el, ['💗', '💋', '🌹', '💕', '✨', '🪙']);
     overShownKey = key;
+    if (s.autoNextAt) startCountdown(s.autoNextAt);
     $('overClose').onclick = () => {
       overDismissed = key;
       renderOver(S);
