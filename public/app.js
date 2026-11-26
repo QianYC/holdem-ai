@@ -80,7 +80,7 @@ function toast(msg) {
   setTimeout(() => S && render(S), 2500);
 }
 
-function seatXY(i, n, rx = 46, ry = 43) {
+function seatXY(i, n, rx = 45, ry = 39) {
   const a = Math.PI / 2 + (i * 2 * Math.PI) / n;
   return [50 + rx * Math.cos(a), 50 + ry * Math.sin(a)];
 }
@@ -530,6 +530,13 @@ $('volume').oninput = (e) => audio.setVolume(Number(e.target.value));
 updateBgmButton();
 
 initSettings();
+
+// Scale seats, cards and chips with the table so everything fits the window at any zoom level.
+new ResizeObserver(([entry]) => {
+  const { width, height } = entry.contentRect;
+  const s = Math.max(0.5, Math.min(1, width / 1150, height / 640));
+  $('table').style.setProperty('--s', s.toFixed(3));
+}).observe($('table'));
 $('settingsBtn').onclick = () => openSettings();
 {
   const sp = new URLSearchParams(location.search);
