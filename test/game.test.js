@@ -75,3 +75,17 @@ test('busted players are eliminated for good and the game ends', { timeout: 1200
   assert.equal(game.status, 'ready');
   assert.ok(game.state().players.every((p) => p.stack === 200 && !p.place));
 });
+
+test('auto next hand deals the next hand by itself', { timeout: 60000 }, async () => {
+  const game = new Game({ ...config(), autoNextHandMs: 30 }, { log: () => {} });
+  game.on('humanTurn', ({ legal, turnId }) => setImmediate(() => game.act(legal.canCheck ? 'check' : 'fold', 0, 'test', turnId)));
+  game.nextHand('test');
+  const deadline = Date.now() + 20000;
+  while (game.table.handNo < 3 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+  assert.ok(game.table.handNo >= 3, `only ${game.table.handNo} hands dealt`);
+  game.setAutoNext(0);
+  await game.running;
+  const no = game.table.handNo;
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(game.table.handNo, no, 'stops after switching off');
+});

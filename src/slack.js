@@ -26,6 +26,8 @@ export function parseCommandText(text) {
   if (/^(下一手|下一局|继续|发牌|next|n|deal)$/.test(t)) return { kind: 'next' };
   if (/^(观战|继续观战|看戏|spectate|watch)$/.test(t)) return { kind: 'spectate' };
   if (/^(暂停|pause)$/.test(t)) return { kind: 'pause' };
+  if (/^(自动|自动下一手|自动发牌|auto)$/.test(t)) return { kind: 'auto', on: true };
+  if (/^(手动|关闭自动|取消自动|manual)$/.test(t)) return { kind: 'auto', on: false };
   if (/^(补码|买入|rebuy)$/.test(t)) return { kind: 'rebuy' };
   if (/^(状态|筹码|筹码榜|排行|排行榜|榜|status|board)$/.test(t)) return { kind: 'board' };
   if (/^(新局|新游戏|重开|重新开始|new|restart)$/.test(t)) return { kind: 'newGame' };
@@ -470,7 +472,8 @@ export class SlackMirror {
     if (me.stack > 0) elements.push({ type: 'button', text: { type: 'plain_text', text: '▶ 下一手' }, action_id: 'hook:poker:next', value: 'next', style: 'primary' });
     else if (!g.eliminationMode()) elements.push({ type: 'button', text: { type: 'plain_text', text: `补码 ${fmt(g.config.startingStack)}` }, action_id: 'hook:poker:rebuy', value: 'rebuy', style: 'primary' });
     elements.push({ type: 'button', text: { type: 'plain_text', text: '📊 筹码榜' }, action_id: 'hook:poker:board', value: 'board' });
-    const text = me.stack > 0 ? '准备好了就开始下一手。' : '你的筹码输光了，可以补码继续。';
+    const auto = g.config.autoNextHandMs > 0 && me.stack > 0;
+    const text = me.stack > 0 ? (auto ? `⏩ ${Math.round(g.config.autoNextHandMs / 1000)} 秒后自动发下一手（回复 \`手动\` 关闭）` : '准备好了就开始下一手。回复 `自动` 可开启自动下一手。') : '你的筹码输光了，可以补码继续。';
     return { text, blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }, { type: 'actions', block_id: `next-${g.table.handNo}`, elements }] };
   }
 
@@ -620,6 +623,12 @@ export class SlackMirror {
       case 'spectate': {
         const r = g.spectate();
         if (!r.ok) this.reply(`⚠️ ${r.error}`);
+        return;
+      }
+      case 'auto': {
+        g.setAutoNext(cmd.on ? (g.config.autoNextHandMs || 5000) : 0);
+        this.reply(cmd.on ? `⏩ 已开启自动下一手：每手结束 ${Math.round((g.config.autoNextHandMs || 5000) / 1000)} 秒后自动发牌。回复 \`手动\` 关闭。` : '⏸ 已关闭自动下一手，回复 `下一手` 继续。');
+        if (cmd.on && g.status === 'handOver' && !g.running) g.scheduleAutoNext();
         return;
       }
       case 'pause': {

@@ -169,6 +169,25 @@ function render(s) {
   $('recent').innerHTML = s.recent.slice().reverse().map((r) => `<div>${esc(r)}</div>`).join('') || '<div style="color:var(--muted)">还没有</div>';
 }
 
+// "Auto next hand" switch shown in the control bar; the delay comes from settings (default 5 s).
+function autoNextToggle(s) {
+  return `<label class="autonext" title="一手结束后自动发下一手"><input type="checkbox" id="autoNextChk" ${s.autoNextHandMs > 0 ? 'checked' : ''}> 自动下一手</label>`;
+}
+function bindAutoNext(s) {
+  const chk = $('autoNextChk');
+  if (!chk) return;
+  chk.onchange = () => post('/api/auto-next', { ms: chk.checked ? Number(localStorage.getItem('holdem.autoNextMs') || 5000) : 0 });
+}
+let countdown = null;
+function startCountdown(at) {
+  clearInterval(countdown);
+  countdown = setInterval(() => {
+    const el = $('autoLeft');
+    if (!el) return clearInterval(countdown);
+    el.textContent = String(Math.max(0, Math.ceil((at - Date.now()) / 1000)));
+  }, 250);
+}
+
 function renderControls(s) {
   const c = $('controls');
   const me = s.players[0];
@@ -202,7 +221,7 @@ function renderControls(s) {
     }
     if (s.status === 'playing') {
       const who = s.thinking ? s.players[s.thinking.seat] : null;
-      c.innerHTML = `<div class="info">${me.folded && me.inHand ? '你已弃牌，' : ''}${who ? `等待 <b>${esc(who.name)}</b>（${esc(who.model)}）思考<span class="thinking-dots"></span>` : '进行中…'}</div>`;
+      c.innerHTML = `<div class="info">${me.folded && me.inHand ? '你已弃牌，' : ''}${who ? `等待 <b>${esc(who.name)}</b>（${esc(who.model)}）思考<span class="thinking-dots"></span>` : '进行中…'}</div>${autoNextToggle(s)}`;
     } else if (me.stack <= 0) {
       c.innerHTML = `<div class="info">你的筹码输光了。</div><button class="gold" id="rebuyBtn">补码 ${fmt(s.startingStack)} 并继续</button>`;
       $('rebuyBtn').onclick = async () => {
@@ -210,9 +229,12 @@ function renderControls(s) {
         if (r.ok) post('/api/next');
       };
     } else {
-      c.innerHTML = `<div class="info">${s.status === 'ready' ? `${s.players.length} 人桌，你的筹码 <b>${fmt(me.stack)}</b>。` : '这一手结束了。'}</div><button class="primary" id="nextBtn">${s.status === 'ready' ? '开始' : '下一手 ▶'}</button>`;
+      const left = s.autoNextAt ? Math.max(0, Math.ceil((s.autoNextAt - Date.now()) / 1000)) : null;
+      c.innerHTML = `<div class="info">${s.status === 'ready' ? `${s.players.length} 人桌，你的筹码 <b>${fmt(me.stack)}</b>。` : `这一手结束了。${left != null ? `<span id="autoLeft">${left}</span> 秒后自动发下一手` : ''}`}</div>${autoNextToggle(s)}<button class="primary" id="nextBtn">${s.status === 'ready' ? '开始' : '下一手 ▶'}</button>`;
       $('nextBtn').onclick = () => post('/api/next');
+      if (left != null) startCountdown(s.autoNextAt);
     }
+    bindAutoNext(s);
     return;
   }
   if (raiseTurn !== L.turnId) {

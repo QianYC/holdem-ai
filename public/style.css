@@ -537,3 +537,5 @@ aside .panel:first-child { flex: 1 1 auto; min-height: 160px; display: flex; fle
 .over { overflow-y: auto; align-items: safe center; padding: 16px 0; }
 .card-portrait { height: clamp(260px, 52vh, 400px); flex-basis: clamp(190px, 18vw, 280px); }
 .over.flirty .title { font-size: clamp(34px, min(6vw, 8vh), 76px); }
+.autonext { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+#autoLeft { color: var(--gold); font-weight: 700; }

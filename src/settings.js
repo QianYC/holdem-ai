@@ -100,6 +100,10 @@ export function createSettingsApi({ root, publicDir, config, game, log, savePath
     return { ok: true, needsNewGame };
   }
 
+  function autoNext(body) {
+    return game.setAutoNext(body.ms);
+  }
+
   async function models() {
     const res = await fetch(`${config.llm.baseUrl.replace(/\/$/, '')}/models`, {
       headers: { authorization: `Bearer ${apiKey(config.llm)}` },
@@ -187,11 +191,12 @@ export function createSettingsApi({ root, publicDir, config, game, log, savePath
     if (origin && origin !== `http://127.0.0.1:${port}` && origin !== `http://localhost:${port}`) return send(res, 403, { ok: false }), true;
     try {
       if (p === '/api/art/upload') return send(res, 200, await upload(req, url)), true;
-      if (!['/api/config', '/api/art/delete', '/api/art/generate'].includes(p)) return false;
+      if (!['/api/config', '/api/art/delete', '/api/art/generate', '/api/auto-next'].includes(p)) return false;
       const chunks = await readRaw(req, 2 * 1024 * 1024);
       const body = JSON.parse(chunks.toString('utf8') || '{}');
       if (p === '/api/config') return send(res, 200, await save(body)), true;
       if (p === '/api/art/delete') return send(res, 200, remove(body)), true;
+      if (p === '/api/auto-next') return send(res, 200, autoNext(body)), true;
       if (p === '/api/art/generate') return send(res, 200, generate(body)), true;
     } catch (e) {
       return send(res, 200, { ok: false, error: String(e?.message ?? e) }), true;

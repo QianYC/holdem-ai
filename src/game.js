@@ -315,6 +315,8 @@ export class Game extends EventEmitter {
       }
     }
     if (this.table.live().length < 2) return { ok: false, error: '没有对手了' };
+    clearTimeout(this.autoTimer);
+    this.autoNextAt = null;
     this.blinds = blindSchedule(this.config, this.table.handNo);
     this.table.smallBlind = this.blinds.sb;
     this.table.bigBlind = this.blinds.bb;
@@ -382,12 +384,41 @@ export class Game extends EventEmitter {
   }
 
   scheduleAutoNext() {
+    clearTimeout(this.autoTimer);
+    this.autoNextAt = null;
     const ms = this.spectating ? (this.spectatePaused ? 0 : (this.config.spectateDelayMs ?? 3000)) : (this.config.autoNextHandMs ?? 0);
-    if (!ms || this.status !== 'handOver') return;
+    // A knockout screen waits for you; so does a busted human (game over).
+    if (!ms || this.status !== 'handOver' || (!this.spectating && (this.knockout || this.human.stack <= 0))) return;
     const no = this.table.handNo;
-    setTimeout(() => {
+    this.autoNextAt = Date.now() + ms;
+    this.autoTimer = setTimeout(() => {
+      this.autoNextAt = null;
       if (!this.running && this.table.handNo === no && this.status === 'handOver') this.nextHand('auto');
     }, ms);
+  }
+
+  // Turns automatic dealing of the next hand on (ms > 0) or off.
+  setAutoNext(ms) {
+    this.config.autoNextHandMs = Math.max(0, Math.round(Number(ms) || 0));
+    // Persist it, or the next hand's config reload would switch it back.
+    if (this.configPath) {
+      try {
+        const file = path.basename(this.configPath) === 'config.example.json' ? path.join(path.dirname(this.configPath), 'config.json') : this.configPath;
+        const saved = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : structuredClone(this.config);
+        saved.autoNextHandMs = this.config.autoNextHandMs;
+        fs.writeFileSync(file, `${JSON.stringify(saved, null, 2)}\n`);
+        this.configPath = file;
+      } catch (e) {
+        this.log(`[game] cannot save autoNextHandMs: ${e}`);
+      }
+    }
+    if (this.config.autoNextHandMs) this.scheduleAutoNext();
+    else {
+      clearTimeout(this.autoTimer);
+      this.autoNextAt = null;
+    }
+    this.changed();
+    return { ok: true, autoNextHandMs: this.config.autoNextHandMs };
   }
 
   eliminationMode() {
@@ -675,6 +706,8 @@ export class Game extends EventEmitter {
       handNo: t.handNo,
       smallBlind: t.smallBlind,
       blindLevel: this.blinds?.level ?? 1,
+      autoNextHandMs: this.config.autoNextHandMs ?? 0,
+      autoNextAt: this.autoNextAt ?? null,
       blindsNextIn: this.blinds?.nextIn ?? null,
       blindsNext: this.blinds?.next ?? null,
       bigBlind: t.bigBlind,
