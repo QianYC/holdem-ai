@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { cardLabel, shuffle } from './cards.js';
 import { aiDecide, askModel, describeAction, positionLabels, quickReplies, shownName } from './ai.js';
+
+const TALK_MEMORY = 300; // earlier-hand lines of table talk the AIs are shown (config: talkMemory)
 import { Table } from './engine.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -165,6 +167,7 @@ export class Game extends EventEmitter {
       handNo: t.handNo,
       button: t.button,
       recent: this.recent,
+      talk: this.talk,
       status: this.status === 'gameOver' ? 'gameOver' : undefined,
       spectating: this.spectating || undefined,
       spectatePaused: this.spectatePaused || undefined,
@@ -224,6 +227,7 @@ export class Game extends EventEmitter {
       t.button = snap.button ?? t.button;
       this.gameId = snap.gameId ?? this.gameId;
       this.recent = snap.recent ?? [];
+      this.talk = snap.talk ?? this.talkFromHistory(snap.gameId);
       if (t.handNo > 0) this.status = snap.status === 'gameOver' ? 'gameOver' : 'handOver';
       this.gameOver = snap.gameOver ?? null;
       this.spectating = Boolean(snap.spectating);
@@ -286,6 +290,12 @@ export class Game extends EventEmitter {
       p.peakStack = p.stack;
     }
     this.resolveArt();
+    // Everything said or sent at the table, kept for the whole game so the AIs remember it.
+    table.on('action', ({ entry, player }) => {
+      if (this.table !== table || !(entry.say || entry.emote)) return;
+      this.talk.push({ hand: table.hand?.no ?? table.handNo, seat: player.seat, name: player.name, human: player.kind === 'human', act: entry.action === 'chat' ? undefined : describeAction(entry), say: entry.say || undefined, emote: entry.emote });
+      this.trimTalk();
+    });
     for (const ev of ['handStart', 'dealt', 'street', 'action', 'turn', 'handEnd']) {
       table.on(ev, (data) => {
         if (this.table !== table) return;
@@ -297,6 +307,7 @@ export class Game extends EventEmitter {
     this.pending = null;
     this.thinking = null;
     this.recent = [];
+    this.talk = [];
     this.lastResult = null;
     this.gameOver = null;
     this.eliminations = [];
@@ -313,6 +324,31 @@ export class Game extends EventEmitter {
 
   changed() {
     this.emit('change');
+  }
+
+  trimTalk() {
+    const max = Number(this.config.talkMemory ?? TALK_MEMORY);
+    if (max > 0 && this.talk.length > max) this.talk.splice(0, this.talk.length - max);
+  }
+
+  // Older snapshots have no talk list: rebuild it from the hand history of the same game.
+  talkFromHistory(gameId) {
+    const talk = [];
+    try {
+      const file = path.join(this.dataDir, 'hands.jsonl');
+      for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+        if (!line.includes(`"game":"${gameId}"`)) continue;
+        const h = JSON.parse(line);
+        for (const e of h.log ?? []) {
+          if (!(e.say || e.emote)) continue;
+          const p = this.table.players[e.seat];
+          talk.push({ hand: h.hand, seat: e.seat, name: e.name ?? p?.name, human: p?.kind === 'human', act: e.action === 'chat' ? undefined : describeAction(e), say: e.say || undefined, emote: e.emote });
+        }
+      }
+    } catch {}
+    this.talk = talk;
+    this.trimTalk();
+    return this.talk;
   }
 
   get human() {
@@ -340,7 +376,8 @@ export class Game extends EventEmitter {
     this.thinking = { seat: p.seat, since: Date.now() };
     this.changed();
     const minDelay = sleep(this.config.minActionDelayMs ?? 600);
-    const d = await aiDecide(this.config.llm, p, legal, view, this.recent.slice(-5), this.log);
+    const earlier = this.talk.filter((t) => t.hand < view.handNo);
+    const d = await aiDecide(this.config.llm, p, legal, view, this.recent.slice(-5), this.log, earlier);
     await minDelay;
     this.thinking = null;
     return d;
@@ -684,6 +721,8 @@ export class Game extends EventEmitter {
     this.fetchKnockoutLine(p, k).then(({ line, reward }) => {
       k.line = line;
       k.reward = reward;
+      this.talk.push({ hand: k.handNo, seat: p.seat, name: p.name, kind: 'ko', say: line });
+      this.trimTalk();
       this.save();
       this.emit('knockout', k);
       this.changed();

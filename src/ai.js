@@ -84,6 +84,13 @@ export function describeAction(e) {
 // The host's default display name is 「你」, which would confuse the models (and other people): call them by role.
 export const shownName = (name, isHuman) => (isHuman && (!name || name === '你') ? '房主' : name);
 
+// One remembered line of table talk from an earlier hand.
+export function talkLine(t) {
+  const who = shownName(t.name, t.seat === 0 && t.human);
+  const what = t.kind === 'ko' ? '出局时说' : t.act ? `${t.act}时说` : '说';
+  return `- 第${t.hand}手 ${who}${t.say ? ` ${what}：「${t.say}」` : ''}${t.emote ? ` [发了表情：${STICKER_NAMES[t.emote] ?? t.emote}]` : ''}`;
+}
+
 // Table talk lines as the models read them.
 function historyLines(log, board, cards) {
   let street = '';
@@ -140,7 +147,7 @@ export async function quickReplies(cfg, model, human, legal, view) {
   return QUICK_STYLES.map((s) => ({ style: s.style, label: s.label, text: typeof d[s.style] === 'string' ? d[s.style].trim().slice(0, 40) : '' })).filter((x) => x.text);
 }
 
-export function buildPrompt(player, legal, view, recent) {
+export function buildPrompt(player, legal, view, recent, talk = []) {
   const pos = positionLabels(view);
   const cards = (cs) => (cs?.length ? cs.map(cardLabel).join(' ') : '（无）');
   const made = evaluate(view.players[player.seat].hole.concat(view.board));
@@ -176,6 +183,7 @@ export function buildPrompt(player, legal, view, recent) {
     '本手行动记录：',
     history.join('\n') || '（无）',
     ...(recent?.length ? ['', '最近几手的结果（供你判断对手风格）：', ...recent.map((r) => `- ${r}`)] : []),
+    ...(talk?.length ? ['', '本局之前各手的牌桌发言和表情（按时间顺序，可以记仇、接梗、翻旧账）：', ...talk.map(talkLine)] : []),
     '',
     `你现在可选的行动：${options.join('、')}。`,
     '牌桌交流是可选的：可以只说一句话、只发一个表情包、两者都发，或者什么都不发——不要每次都发言，按局面和人设自然地来（大约一半的时候保持沉默）。',
@@ -242,9 +250,9 @@ export function fallbackDecision(player, legal, view) {
   return { action: 'fold' };
 }
 
-export async function aiDecide(cfg, player, legal, view, recent, log = () => {}) {
+export async function aiDecide(cfg, player, legal, view, recent, log = () => {}, talk = []) {
   const start = Date.now();
-  const prompt = buildPrompt(player, legal, view, recent);
+  const prompt = buildPrompt(player, legal, view, recent, talk);
   let lastError;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {

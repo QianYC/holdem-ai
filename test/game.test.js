@@ -127,3 +127,23 @@ test('LAN: several humans share the table, each sees only their own cards', { ti
   const humansOut = s.players.filter((p) => p.kind === 'human' && p.place && p.place > 1);
   for (const h of humansOut) if (s.gameOver.subject !== h.seat && s.gameOver.type !== 'defeat') assert.ok(game.table.players[h.seat].out || h.place, 'busted humans get a result');
 });
+
+test('AIs remember table talk from earlier hands', { timeout: 60000 }, async () => {
+  const { buildPrompt } = await import('../src/ai.js');
+  const game = new Game(config(), { log: () => {} });
+  let said = false;
+  game.on('humanTurn', ({ legal, turnId }) =>
+    setImmediate(() => {
+      if (!said) said = game.say('这把我拿的是 AA，信不信由你', 'test').ok;
+      game.act(legal.canCheck ? 'check' : 'fold', 0, 'test', turnId);
+    }),
+  );
+  game.nextHand('test');
+  await game.running;
+  assert.ok(said);
+  assert.ok(game.talk.some((t) => t.say?.includes('AA') && t.hand === 1));
+  const ai = game.table.players.find((p) => p.kind === 'ai');
+  const prompt = buildPrompt(ai, { canCheck: true, toCall: 0, minTo: 40, maxTo: 200, pot: 30, stack: 200 }, game.table.viewFor(ai), [], game.talk);
+  assert.match(prompt, /本局之前各手的牌桌发言/);
+  assert.match(prompt, /第1手 房主 说：「这把我拿的是 AA/);
+});
