@@ -1,21 +1,24 @@
 import { EventEmitter } from 'node:events';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { cardLabel, shuffle } from './cards.js';
 import { aiDecide, askModel, describeAction, onUsage, positionLabels, quickReplies, shownName, sidelinePrompt } from './ai.js';
+import { Table } from './engine.js';
 import { historyRound, latestRound } from './rounds.js';
 
 const TALK_MEMORY = 300; // earlier-hand lines of table talk the AIs are shown (config: talkMemory)
-import { Table } from './engine.js';
-
+const ART_RESCAN_MS = 60000; // between hands, character art on disk is rescanned at most this often
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const cardsText = (cs) => (cs?.length ? cs.map(cardLabel).join(' ') : '未亮牌');
+const cleanLine = (x, n) => (typeof x === 'string' && x.trim() ? x.trim().slice(0, n) : null);
 export const IMG_EXT = ['.png', '.webp', '.jpg', '.jpeg', '.gif'];
 
 // Tournament-style blind levels: [small, big] pairs; past the end of the list the last level keeps doubling.
-export function defaultBlindLevels(sb) {
+export function defaultBlindLevels(sb, bb = sb * 2) {
   return [1, 1.5, 2, 3, 5, 7.5, 10, 15, 20, 30, 50, 75, 100].map((m) => {
     const s = Math.max(1, Math.round(sb * m));
-    return [s, s * 2];
+    return [s, bb === sb * 2 ? s * 2 : Math.max(s + 1, Math.round(bb * m))];
   });
 }
 
@@ -23,7 +26,7 @@ export function blindSchedule(config, handIndex) {
   const per = Number(config.handsPerLevel ?? 0);
   const base = [config.smallBlind, config.bigBlind];
   if (!per) return { sb: base[0], bb: base[1], level: 1, nextIn: null, next: null };
-  const levels = Array.isArray(config.blindLevels) && config.blindLevels.length ? config.blindLevels : defaultBlindLevels(base[0]);
+  const levels = Array.isArray(config.blindLevels) && config.blindLevels.length ? config.blindLevels : defaultBlindLevels(base[0], base[1]);
   const at = (i) => {
     if (i < levels.length) return levels[i];
     const [s, b] = levels.at(-1);
@@ -125,12 +128,19 @@ export class Game extends EventEmitter {
     if (g) g.name = nick;
     else {
       if (1 + this.guests.length + this.config.ai.length >= MAX_SEATS) return { ok: false, error: `桌子坐满了（最多 ${MAX_SEATS} 人）` };
-      g = { id: `g-${token.slice(0, 8)}`, token, name: nick, joinedAt: Date.now() };
+      // Coming back to the seat this browser left during the current game keeps that seat (and its chips).
+      const prev = this.table.players.find((p) => p.guest && p.leftToken === token);
+      g = { id: prev?.id ?? `g-${crypto.randomUUID()}`, token, name: nick, joinedAt: Date.now() };
       this.guests.push(g);
     }
     this.saveGuests();
     const seat = this.seatOfToken(token);
-    if (seat >= 0) this.table.players[seat].name = nick;
+    if (seat >= 0) {
+      const p = this.table.players[seat];
+      p.name = nick;
+      p.sittingOut = false;
+      delete p.leftToken;
+    }
     // Nobody has played yet: rebuild the table right away so the newcomer sits down.
     else if (this.status === 'ready' && this.table.handNo === 0 && !this.running) this.newGame();
     this.log(`[lan] ${nick} joined`);
@@ -148,14 +158,27 @@ export class Game extends EventEmitter {
     const seat = this.table.players.findIndex((p) => p.id === g.id);
     if (seat >= 0) {
       const p = this.table.players[seat];
+      // The seat stays (with its chips) until the next new game. A hand in progress is folded for them;
+      // later turns fold automatically (see decide()).
       p.sittingOut = true;
-      if (this.pending?.seat === seat) this.pending.resolve({ action: 'fold', source: 'left' });
+      p.leftToken = token;
+      if (this.pending?.seat === seat) this.takePending().resolve({ action: 'fold', forceFold: true, source: 'left' });
+      else if (this.running) this.table.foldOutOfTurn(p);
       if (this.status === 'ready' && this.table.handNo === 0 && !this.running) this.newGame();
     }
     this.log(`[lan] ${g.name} left`);
     this.emit('lanChange');
     this.changed();
     return { ok: true };
+  }
+
+  // Ends the current human turn exactly once: clears it and its timeout, returns it (or null).
+  takePending() {
+    const pd = this.pending;
+    if (!pd) return null;
+    this.pending = null;
+    clearTimeout(pd.timer);
+    return pd;
   }
 
   snapshotPath() {
@@ -176,12 +199,16 @@ export class Game extends EventEmitter {
       status: this.status === 'gameOver' ? 'gameOver' : undefined,
       spectating: this.spectating || undefined,
       spectatePaused: this.spectatePaused || undefined,
-      defeat: this.defeat ?? undefined,
       gameOver: this.gameOver ?? undefined,
       knockout: this.status === 'handOver' ? (this.knockout ?? undefined) : undefined,
+      lastResult: this.lastResult ?? undefined,
+      eliminations: this.eliminations?.length ? this.eliminations : undefined,
       players: t.players.map((p) => ({
         id: p.id,
-        model: p.model,
+        // Guests are saved with their name so a seat whose player has left can be rebuilt on restore.
+        name: p.guest ? p.name : undefined,
+        guest: p.guest || undefined,
+        sittingOut: p.sittingOut || undefined,
         stack: p.stack,
         buyIns: p.buyIns,
         handsWon: p.handsWon,
@@ -208,9 +235,21 @@ export class Game extends EventEmitter {
     try {
       const snap = JSON.parse(fs.readFileSync(file, 'utf8'));
       const byId = new Map(this.table.players.map((p) => [p.id, p]));
-      if (!snap.players?.length || snap.players.some((p) => !byId.has(p.id)) || snap.players[0].id !== 'human') return;
+      const isGuest = (p) => p.guest || String(p.id).startsWith('g-');
+      // Guests who left during the game are gone from lan.json: their seats come back as sitting out.
+      const departed = (snap.players ?? []).filter((p) => !byId.has(p.id));
+      if (!snap.players?.length || snap.players[0].id !== 'human' || departed.some((p) => !isGuest(p))) {
+        this.log('[game] saved table does not match the configured players, starting a new game');
+        return;
+      }
       // Characters added to the config since then join at the next new game; until then keep the saved seats.
-      if (snap.players.length !== byId.size || snap.players.some((p, i) => p.id !== this.table.players[i].id)) this.newGame({ order: snap.players.slice(1).map((p) => p.id), exact: true });
+      if (departed.length || snap.players.length !== byId.size || snap.players.some((p, i) => p.id !== this.table.players[i].id)) {
+        this.newGame({
+          order: snap.players.slice(1).map((p) => p.id),
+          exact: true,
+          departed: departed.map((p) => ({ id: p.id, name: p.name ?? '离开的玩家', kind: 'human', guest: true, sittingOut: true })),
+        });
+      }
       const t = this.table;
       snap.players.forEach((p, i) =>
         Object.assign(t.players[i], {
@@ -222,6 +261,7 @@ export class Game extends EventEmitter {
           eliminatedHand: p.eliminatedHand,
           eliminatedBy: p.eliminatedBy,
           peakStack: p.peakStack ?? p.stack,
+          sittingOut: p.sittingOut || t.players[i].sittingOut || undefined,
         }),
       );
       t.handNo = snap.handNo ?? 0;
@@ -234,48 +274,35 @@ export class Game extends EventEmitter {
       this.gameId = snap.gameId ?? this.gameId;
       this.recent = snap.recent ?? [];
       this.stats = snap.stats ?? {};
-      this.talk = snap.talk ?? this.talkFromHistory(snap.gameId);
       this.handHistory = this.loadHandHistory(snap.gameId);
+      this.talk = snap.talk ?? this.talkFromHistory(this.handHistory);
+      this.trimTalk();
       if (t.handNo > 0) this.status = snap.status === 'gameOver' ? 'gameOver' : 'handOver';
       this.gameOver = snap.gameOver ?? null;
       this.spectating = Boolean(snap.spectating);
       this.spectatePaused = Boolean(snap.spectatePaused);
-      this.defeat = snap.defeat ?? null;
       this.knockout = snap.knockout ?? null;
+      this.lastResult = snap.lastResult ?? null;
+      this.eliminations = snap.eliminations ?? [];
       const go = this.gameOver;
-      if (go && go.taunt == null) {
-        this.fetchTaunt(go.type, t.players[go.rival]).then(({ say, penalty }) => {
-          if (this.gameOver !== go) return;
-          go.taunt = say;
-          go.penalty = penalty;
-          this.save();
-          this.emit('gameOver', go);
-          this.changed();
-        });
-      }
+      if (go && go.taunt == null) this.requestTaunt(go, go.type === 'champion' ? this.human : t.players[go.subject]);
       const k = this.knockout;
-      if (k && !k.line && t.players[k.seat]) {
-        this.fetchKnockoutLine(t.players[k.seat], k).then(({ line, reward }) => {
-          k.line = line;
-          k.reward = reward;
-          this.save();
-          this.emit('knockout', k);
-          this.changed();
-        });
-      }
+      if (k && !k.line && t.players[k.seat]) this.requestKnockoutLine(t.players[k.seat], k, false);
       this.log(`[game] restored table after hand ${t.handNo}`);
     } catch (e) {
       this.log(`[game] cannot restore table: ${e}`);
     }
   }
 
-  newGame({ order, exact = false } = {}) {
+  newGame({ order, exact = false, departed = [] } = {}) {
     const c = this.config;
-    if (this.pending) this.pending.resolve({ action: 'fold', source: 'reset' });
+    this.takePending()?.resolve({ action: 'fold', forceFold: true, source: 'reset' });
+    clearTimeout(this.autoTimer);
+    this.autoNextAt = null;
     this.gameId = Date.now().toString(36);
     const ais = c.ai.map((a, i) => ({ id: `ai${i + 1}`, kind: 'ai', ...a, stack: c.startingStack }));
     const guests = (this.guests ?? []).map((g) => ({ id: g.id, name: g.name, kind: 'human', guest: true, stack: c.startingStack }));
-    const others = [...guests, ...ais];
+    const others = [...guests, ...ais, ...departed.map((d) => ({ ...d, stack: c.startingStack }))];
     // Every new game seats everyone else in a random order around the host (each viewer is drawn at the bottom).
     let seated = order ? order.map((id) => others.find((a) => a.id === id)).filter(Boolean) : c.randomSeats === false ? others : shuffle(others.slice());
     if (seated.length !== others.length && !exact) seated = others;
@@ -301,16 +328,18 @@ export class Game extends EventEmitter {
     table.on('action', ({ entry, player }) => {
       if (this.table !== table) return;
       this.recordAction(entry, player);
+      // Everything said or sent at the table, kept for the whole game so the AIs remember it.
+      if (entry.say || entry.emote) {
+        this.talk.push({ hand: table.hand?.no ?? table.handNo, seat: player.seat, name: player.name, human: player.kind === 'human', act: entry.action === 'chat' ? undefined : describeAction(entry), say: entry.say || undefined, emote: entry.emote });
+        this.trimTalk();
+      }
       this.sidelineTrigger(entry, player);
     });
     table.on('handEnd', ({ result }) => {
       if (this.table === table) this.sidelineAfterHand(result);
     });
-    // Everything said or sent at the table, kept for the whole game so the AIs remember it.
-    table.on('action', ({ entry, player }) => {
-      if (this.table !== table || !(entry.say || entry.emote)) return;
-      this.talk.push({ hand: table.hand?.no ?? table.handNo, seat: player.seat, name: player.name, human: player.kind === 'human', act: entry.action === 'chat' ? undefined : describeAction(entry), say: entry.say || undefined, emote: entry.emote });
-      this.trimTalk();
+    table.on('decideError', ({ player, error }) => {
+      if (this.table === table) this.log(`[game] ${player.name} could not decide: ${error?.message ?? error}`);
     });
     for (const ev of ['handStart', 'dealt', 'street', 'action', 'turn', 'handEnd']) {
       table.on(ev, (data) => {
@@ -322,6 +351,9 @@ export class Game extends EventEmitter {
     this.status = 'ready';
     this.pending = null;
     this.thinking = null;
+    this.quick = null;
+    this.sidelineBusy = new Set();
+    this.sidelineLast = 0;
     this.recent = [];
     this.talk = [];
     this.stats = {};
@@ -334,7 +366,6 @@ export class Game extends EventEmitter {
     this.blinds = null;
     this.spectating = false;
     this.spectatePaused = false;
-    this.defeat = null;
     this.running = null;
     this.emit('newGame');
     this.save();
@@ -420,8 +451,9 @@ export class Game extends EventEmitter {
     if (!cfg.enabled || this.status !== 'playing') return;
     const h = this.table.hand;
     const said = entry.say ?? '';
-    // Someone talks to a character by name: she answers even from the rail.
-    if (said) {
+    // Someone talks to a character by name: she answers even from the rail. Sideline lines themselves do not
+    // call anyone over, or two folded characters could keep answering each other for the whole hand.
+    if (said && !entry.sideline) {
       const named = this.sidelineCandidates([player.seat]).filter((p) => [p.name, p.title, p.key].filter(Boolean).some((n) => said.toLowerCase().includes(String(n).toLowerCase())));
       for (const p of named.slice(0, 2)) this.sideline(p, `${shownName(player.name, player.seat === 0)} 刚刚点了你的名：「${said}」`, true);
       if (named.length) return;
@@ -456,23 +488,25 @@ export class Game extends EventEmitter {
   }
 
   async sideline(p, why, mustAnswer) {
-    (this.sidelineBusy ??= new Set()).add(p.seat);
+    const table = this.table;
+    const busy = this.sidelineBusy;
+    busy.add(p.seat);
     p.sidelineAt = Date.now();
     this.sidelineLast = Date.now();
-    const handNo = this.table.hand?.no;
+    const handNo = table.hand?.no;
     try {
-      const view = this.table.viewFor(p);
-      const d = await askModel({ ...this.config.llm, timeoutMs: 20000 }, { ...p, purpose: 'sideline' }, sidelinePrompt(p, view, why + (mustAnswer ? '（有人在叫你，最好回一句）' : '')), this.table.players.length);
+      const view = table.viewFor(p);
+      const d = await askModel({ ...this.config.llm, timeoutMs: 20000 }, { ...p, purpose: 'sideline' }, sidelinePrompt(p, view, why + (mustAnswer ? '（有人在叫你，最好回一句）' : '')), table.players.length);
       const say = typeof d.say === 'string' ? d.say.trim().slice(0, 60) : '';
       const emote = typeof d.emote === 'string' && p.stickers?.some((s) => s.id === d.emote) ? d.emote : undefined;
-      // Too late once the next hand has started.
-      if ((!say && !emote) || this.table.hand?.no !== handNo) return;
-      this.table.chat(p, say, { emote, sideline: true });
+      // Too late once the next hand (or a new game) has started.
+      if ((!say && !emote) || this.table !== table || table.hand?.no !== handNo) return;
+      table.chat(p, say, { emote, sideline: true });
       this.log(`[hand ${handNo}] ${p.name} (场外) ${say}${emote ? ` [${emote}]` : ''}`);
     } catch (e) {
       this.log(`[game] sideline ${p.name} failed: ${e?.message ?? e}`);
     } finally {
-      this.sidelineBusy.delete(p.seat);
+      busy.delete(p.seat);
     }
   }
 
@@ -502,24 +536,17 @@ export class Game extends EventEmitter {
     return out;
   }
 
-  // Older snapshots have no talk list: rebuild it from the hand history of the same game.
-  talkFromHistory(gameId) {
+  // Older snapshots have no talk list: rebuild it from the hand history (loadHandHistory) of the same game.
+  talkFromHistory(records) {
     const talk = [];
-    try {
-      const file = path.join(this.dataDir, 'hands.jsonl');
-      for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
-        if (!line.includes(`"game":"${gameId}"`)) continue;
-        const h = JSON.parse(line);
-        for (const e of h.log ?? []) {
-          if (!(e.say || e.emote)) continue;
-          const p = this.table.players[e.seat];
-          talk.push({ hand: h.hand, seat: e.seat, name: e.name ?? p?.name, human: p?.kind === 'human', act: e.action === 'chat' ? undefined : describeAction(e), say: e.say || undefined, emote: e.emote });
-        }
+    for (const h of records) {
+      for (const e of h.log ?? []) {
+        if (!(e.say || e.emote)) continue;
+        const p = this.table.players[e.seat];
+        talk.push({ hand: h.hand, seat: e.seat, name: e.name ?? p?.name, human: p?.kind === 'human', act: e.action === 'chat' ? undefined : describeAction(e), say: e.say || undefined, emote: e.emote });
       }
-    } catch {}
-    this.talk = talk;
-    this.trimTalk();
-    return this.talk;
+    }
+    return talk;
   }
 
   get human() {
@@ -527,69 +554,87 @@ export class Game extends EventEmitter {
   }
 
   async decide(p, legal, view) {
+    // Someone who left the table folds at once (a check would keep an absent player in the pot).
+    if (p.sittingOut) return { action: 'fold', forceFold: true, source: 'left' };
     if (p.kind === 'human') {
       return new Promise((resolve) => {
-        this.pending = { resolve, legal, seat: p.seat, handNo: view.handNo, turnId: `${view.handNo}-${view.log.length}` };
+        // The random part keeps ids unique across new games and restarts (old Slack buttons must not match).
+        const pending = { resolve, legal, seat: p.seat, turnId: `${view.handNo}-${view.log.length}-${crypto.randomBytes(3).toString('hex')}` };
+        this.pending = pending;
         // LAN players who walk away should not stall the table: check / fold for them after a while.
         const limit = p.guest ? Number(this.config.lan?.turnTimeoutMs ?? 90000) : 0;
         if (limit > 0) {
-          const pending = this.pending;
           pending.deadline = Date.now() + limit;
-          setTimeout(() => {
+          pending.timer = setTimeout(() => {
             if (this.pending === pending) this.act(legal.canCheck ? 'check' : 'fold', 0, 'timeout', pending.turnId, p.seat);
           }, limit);
+          pending.timer.unref?.();
         }
-        this.emit('humanTurn', { player: p, legal, view, turnId: this.pending.turnId });
-        this.makeQuickReplies(p, legal, view, this.pending.turnId);
+        this.emit('humanTurn', { player: p, legal, view, turnId: pending.turnId });
+        this.makeQuickReplies(p, legal, view, pending.turnId);
         this.changed();
       });
     }
+    // Everything below may finish after a new game started: only touch game state while this table is current.
+    const table = this.table;
+    const current = () => this.table === table;
+    const { handHistory, startStacks } = this;
     this.thinking = { seat: p.seat, since: Date.now() };
     this.changed();
-    const minDelay = sleep(this.config.minActionDelayMs ?? 600);
-    const earlier = this.talk.filter((t) => t.hand < view.handNo);
-    // The AI looks the table up itself (function calling); config aiTools: false puts everything in the prompt instead.
-    let latestSeen = 0;
-    const run =
-      this.config.aiTools === false
-        ? null
-        : {
-            // Repeat calls within one decision get a short note instead of the same JSON again (saves tokens).
-            get_latest_round: () => (latestSeen++ ? { note: '和刚才返回的一样：这次决策期间牌局没有变化，请直接根据上一次的结果决定。' } : latestRound(this.table.viewFor(p), p, legal, this.startStacks)),
-            get_history_rounds: ({ count } = {}) => {
-              const all = this.handHistory.filter((r) => r.hand < view.handNo);
-              const n = Math.max(1, Math.min(all.length, Math.floor(Number(count) || 1)));
-              return { totalFinishedHands: all.length, returned: Math.min(n, all.length), rounds: all.slice(-n).map((r) => historyRound(r, p.seat)) };
-            },
-          };
-    const d = await aiDecide(this.config.llm, p, legal, view, this.recent.slice(-5), this.log, earlier, run);
-    const st = this.statFor(p);
-    st.decisions++;
-    st.thinkMs += d.ms ?? 0;
-    if (d.fallback) st.fallbacks++;
-    for (const t of d.tools ?? []) {
-      const name = t.replace(/\(.*$/, '');
-      st.toolCalls[name] = (st.toolCalls[name] ?? 0) + 1;
-      const n = Number(/\((\d+)\)/.exec(t)?.[1]);
-      if (n) st.historyHands += n;
+    try {
+      const minDelay = sleep(this.config.minActionDelayMs ?? 600);
+      const earlier = this.talk.filter((t) => t.hand < view.handNo);
+      // The AI looks the table up itself (function calling); config aiTools: false puts everything in the prompt instead.
+      let latestSeen = 0;
+      const run =
+        this.config.aiTools === false
+          ? null
+          : {
+              // Repeat calls within one decision get a short note instead of the same JSON again (saves tokens).
+              get_latest_round: () => (latestSeen++ ? { note: '和刚才返回的一样：这次决策期间牌局没有变化，请直接根据上一次的结果决定。' } : latestRound(table.viewFor(p), p, legal, startStacks)),
+              get_history_rounds: ({ count } = {}) => {
+                const all = handHistory.filter((r) => r.hand < view.handNo);
+                const n = Math.max(1, Math.min(all.length, Math.floor(Number(count) || 1)));
+                return { totalFinishedHands: all.length, returned: Math.min(n, all.length), rounds: all.slice(-n).map((r) => historyRound(r, p.seat)) };
+              },
+            };
+      const d = await aiDecide(this.config.llm, p, legal, view, this.recent.slice(-5), this.log, earlier, run);
+      if (current()) {
+        const st = this.statFor(p);
+        st.decisions++;
+        st.thinkMs += d.ms ?? 0;
+        if (d.fallback) st.fallbacks++;
+        for (const t of d.tools ?? []) {
+          const name = t.replace(/\(.*$/, '');
+          st.toolCalls[name] = (st.toolCalls[name] ?? 0) + 1;
+          const n = Number(/\((\d+)\)/.exec(t)?.[1]);
+          if (n) st.historyHands += n;
+        }
+      }
+      await minDelay;
+      return d;
+    } finally {
+      if (current() && this.thinking?.seat === p.seat) this.thinking = null;
     }
-    await minDelay;
-    this.thinking = null;
-    return d;
   }
 
   makeQuickReplies(p, legal, view, turnId) {
     if (this.config.quickReplies === false) return;
-    this.quick = { turnId, items: null };
+    const quick = { turnId, items: null };
+    this.quick = quick;
     const model = this.config.quickReplyModel ?? 'gpt-6-luna';
+    const deliver = (items) => {
+      if (this.quick !== quick) return;
+      quick.items = items;
+      this.emit('quickReplies', { turnId, items });
+      this.changed();
+    };
     quickReplies(this.config.llm, model, p, legal, view)
-      .then((items) => {
-        if (this.quick?.turnId !== turnId) return;
-        this.quick.items = items;
-        this.emit('quickReplies', { turnId, items });
-        this.changed();
-      })
-      .catch((e) => this.log(`[game] quick replies failed: ${e?.message ?? e}`));
+      .then(deliver)
+      .catch((e) => {
+        this.log(`[game] quick replies failed: ${e?.message ?? e}`);
+        deliver([]); // stop showing "loading"
+      });
   }
 
   // The human's table talk (any time during a hand).
@@ -608,16 +653,17 @@ export class Game extends EventEmitter {
   }
 
   act(action, amount, source = 'web', turnId, seat = 0) {
-    if (!this.pending || this.pending.seat !== seat) return { ok: false, error: '现在不是你的回合' };
-    if (turnId && turnId !== this.pending.turnId) return { ok: false, error: '这个按钮已经过期了' };
-    const { resolve, legal } = this.pending;
+    const pd = this.pending;
+    if (!pd || pd.seat !== seat) return { ok: false, error: '现在不是你的回合' };
+    if (turnId && turnId !== pd.turnId) return { ok: false, error: '这个按钮已经过期了' };
+    const { resolve, legal } = pd;
     let a = String(action).toLowerCase();
     if (a === 'checkcall') a = legal.canCheck ? 'check' : 'call';
     if (a === 'raise' && !(Number(amount) > 0)) return { ok: false, error: '加注需要金额' };
     if (a === 'raise' && legal.canRaise && Number(amount) > legal.maxTo) amount = legal.maxTo;
     if (a === 'check' && !legal.canCheck) return { ok: false, error: `现在需要跟注 ${legal.toCall}，不能过牌` };
     if (a === 'raise' && !legal.canRaise) return { ok: false, error: '现在不能加注' };
-    this.pending = null;
+    this.takePending();
     this.lastHumanSource = source;
     resolve({ action: a, amount: Number(amount), source });
     return { ok: true };
@@ -626,7 +672,7 @@ export class Game extends EventEmitter {
   nextHand(source = 'web') {
     if (this.running) return { ok: false, error: '这一手还没结束' };
     if (this.status === 'gameOver') return { ok: false, error: '这一局已经结束了，开新局再来' };
-    this.reloadTuning();
+    this.reloadTuning({ betweenHands: true });
     const humansIn = this.table.players.some((p) => p.kind === 'human' && p.stack > 0 && !p.sittingOut);
     if (!humansIn && !this.spectating) return { ok: false, error: this.eliminationMode() ? '你已经出局了，开新局再来' : '你的筹码输光了，先补码（rebuy）' };
     const c = this.config;
@@ -637,7 +683,19 @@ export class Game extends EventEmitter {
         this.emit('rebuy', { player: p });
       }
     }
-    if (this.table.live().length < 2) return { ok: false, error: '没有对手了' };
+    if (this.table.live().length < 2) {
+      // Tournament whose last opponents left the table between hands: whoever is still seated wins it.
+      const [last] = this.table.live();
+      if (last && this.eliminationMode() && this.status === 'handOver' && this.table.hand) {
+        last.place = 1;
+        this.spectating = false;
+        this.finish(last.kind === 'human' ? 'victory' : 'champion', last);
+        this.save();
+        this.changed();
+        return { ok: false, error: '对手都离开了，这一局结束' };
+      }
+      return { ok: false, error: '没有对手了' };
+    }
     clearTimeout(this.autoTimer);
     this.autoNextAt = null;
     this.blinds = blindSchedule(this.config, this.table.handNo);
@@ -648,8 +706,8 @@ export class Game extends EventEmitter {
     this.lastResult = null;
     this.eliminations = [];
     this.knockout = null;
-    this.nextSource = source;
     const table = this.table;
+    const before = table.handNo;
     const run = table
       .playHand()
       .then((result) => {
@@ -657,7 +715,17 @@ export class Game extends EventEmitter {
       })
       .catch((e) => {
         this.log(`[game] hand crashed: ${e?.stack ?? e}`);
-        if (this.table === table) this.status = 'ready';
+        if (this.table !== table) return;
+        // The hand is void: everyone gets back what they put in (only if it was dealt and never settled).
+        const h = table.hand;
+        if (h && h.no > before && !h.result) {
+          for (const p of table.players) {
+            p.stack += p.total;
+            p.total = 0;
+            p.bet = 0;
+          }
+        }
+        this.status = 'ready';
       })
       .finally(() => {
         if (this.running !== run) return;
@@ -671,12 +739,14 @@ export class Game extends EventEmitter {
   }
 
   // LLM settings (timeouts, token caps, reasoning) apply from the next hand without a restart.
-  reloadTuning() {
+  // betweenHands: called before every hand, where character art is only rescanned when the config changed
+  // or the last scan is older than ART_RESCAN_MS (uploads through the settings page rescan right away).
+  reloadTuning({ betweenHands = false } = {}) {
     if (!this.configPath) return;
     try {
       const fresh = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
       this.config.llm = fresh.llm ?? this.config.llm;
-      for (const key of ['minActionDelayMs', 'autoNextHandMs', 'aiAutoRebuy', 'eliminateBusted', 'defeatStyle', 'randomSeats', 'handsPerLevel', 'blindLevels', 'quickReplies', 'quickReplyModel', 'revealAllCards', 'spectateDelayMs', 'imageModel', 'sideline']) if (key in fresh) this.config[key] = fresh[key];
+      for (const key of ['minActionDelayMs', 'autoNextHandMs', 'aiAutoRebuy', 'eliminateBusted', 'defeatStyle', 'randomSeats', 'handsPerLevel', 'blindLevels', 'quickReplies', 'quickReplyModel', 'revealAllCards', 'spectateDelayMs', 'knockoutDelayMs', 'imageModel', 'sideline', 'aiTools', 'talkMemory']) if (key in fresh) this.config[key] = fresh[key];
       (fresh.ai ?? []).forEach((a, i) => {
         const p = this.table.players.find((x) => x.id === `ai${i + 1}`);
         if (!p) return;
@@ -686,6 +756,13 @@ export class Game extends EventEmitter {
         if (swap) {
           this.log(`[game] seat ${p.seat}: ${p.name} (${p.model}) replaced by ${a.name} (${a.model})`);
           this.emit('seatSwap', { seat: p.seat, from: { name: p.name, model: p.model }, to: { name: a.name, model: a.model } });
+          // The outgoing character keeps her stats under their own key; the newcomer starts fresh.
+          const st = this.stats[p.id];
+          if (st) {
+            delete this.stats[p.id];
+            const key = `${p.id}:${st.model ?? p.model}`;
+            this.stats[key] = { ...st, id: key };
+          }
           p.model = a.model;
         }
         // Everything except the seat identity can change between hands.
@@ -696,7 +773,9 @@ export class Game extends EventEmitter {
         }
       });
       if (fresh.stickers) this.config.stickers = fresh.stickers;
-      this.resolveArt();
+      const artKey = JSON.stringify([fresh.ai, fresh.stickers, fresh.scene]);
+      if (!betweenHands || artKey !== this.artKey || Date.now() - (this.artAt ?? 0) > ART_RESCAN_MS) this.resolveArt();
+      this.artKey = artKey;
     } catch (e) {
       this.log(`[game] cannot reload config: ${e}`);
     }
@@ -716,6 +795,7 @@ export class Game extends EventEmitter {
 
   // Character art lives in public/characters/<key>/: portrait.*, win.*, lose.* and stickers/*.
   // Explicit paths in the config (portrait / winPortrait / losePortrait) take precedence.
+  // Also caches the scene art, which state() sends on every push.
   resolveArt() {
     for (const p of this.table.players) {
       p.media = {};
@@ -725,6 +805,13 @@ export class Game extends EventEmitter {
       p.media = { portrait: art.portrait, win: art.win, lose: art.lose, seat: art.seat, dealer: art.dealer };
       p.stickers = art.stickers;
     }
+    try {
+      this.scene = this.sceneArt();
+    } catch (e) {
+      this.scene = null;
+      this.log(`[game] cannot read scene art: ${e}`);
+    }
+    this.artAt = Date.now();
   }
 
   scheduleAutoNext() {
@@ -738,6 +825,7 @@ export class Game extends EventEmitter {
     this.autoNextAt = Date.now() + ms;
     this.autoTimer = setTimeout(() => {
       this.autoNextAt = null;
+      if (this.spectating && this.spectatePaused) return;
       if (!this.running && this.table.handNo === no && this.status === 'handOver') this.nextHand('auto');
     }, ms);
   }
@@ -770,12 +858,15 @@ export class Game extends EventEmitter {
     return this.config.eliminateBusted !== false;
   }
 
-  rebuy() {
+  // Cash-game top-up for a busted human (the host by default; LAN guests pass their seat).
+  rebuy(seat = 0) {
     if (this.eliminationMode()) return { ok: false, error: '淘汰赛：输光就出局，不能补码。开新局再来吧' };
     if (this.running) return { ok: false, error: '这一手结束后才能补码' };
-    if (this.human.stack > 0) return { ok: false, error: '还有筹码，不需要补码' };
-    this.human.stack = this.config.startingStack;
-    this.human.buyIns++;
+    const p = this.table.players[seat];
+    if (!p || p.kind !== 'human' || p.sittingOut) return { ok: false, error: '入座之后才能补码' };
+    if (p.stack > 0) return { ok: false, error: '还有筹码，不需要补码' };
+    p.stack = this.config.startingStack;
+    p.buyIns++;
     this.save();
     this.changed();
     return { ok: true };
@@ -809,25 +900,16 @@ export class Game extends EventEmitter {
     this.recent.push(this.summarize(result));
     if (this.recent.length > 20) this.recent.shift();
     if (this.eliminationMode()) this.eliminate(result);
-    this.handHistory.push({ game: this.gameId, hand: h.no, board: h.board.slice(), log: h.log, result, ...this.historyExtras() });
+    // A copy of the log: sideline lines that arrive after the hand ended must not change the record.
+    const rec = { game: this.gameId, hand: h.no, board: h.board.slice(), log: h.log.slice(), result, ...this.historyExtras() };
+    this.handHistory.push(rec);
     this.save();
     if (this.dataDir) {
       try {
         fs.mkdirSync(this.dataDir, { recursive: true });
-        fs.appendFileSync(
-          path.join(this.dataDir, 'hands.jsonl'),
-          `${JSON.stringify({
-            game: this.gameId,
-            hand: h.no,
-            at: new Date().toISOString(),
-            button: h.button,
-            board: h.board,
-            holes: Object.fromEntries(t.players.filter((p) => p.inHand).map((p) => [p.name, p.hole])),
-            log: h.log,
-            result,
-            ...this.historyExtras(),
-          })}\n`,
-        );
+        // `holes` (cards by name) is kept for people reading the file; the game itself uses holesBySeat.
+        const holes = Object.fromEntries(t.players.filter((p) => p.inHand).map((p) => [p.name, p.hole]));
+        fs.appendFileSync(path.join(this.dataDir, 'hands.jsonl'), `${JSON.stringify({ ...rec, at: new Date().toISOString(), holes })}\n`);
       } catch (e) {
         this.log(`[game] cannot write history: ${e}`);
       }
@@ -835,15 +917,17 @@ export class Game extends EventEmitter {
   }
 
   // Busted players leave the table for good; the human busting (or being the last one standing) ends the game.
+  // Seats whose LAN player has left (sittingOut) no longer count as alive, even with chips.
   eliminate(result) {
     const t = this.table;
     const h = t.hand;
+    const alive = (p) => p.stack > 0 && !p.sittingOut;
     const busted = t.players.filter((p) => p.inHand && p.stack === 0 && !p.place).sort((a, b) => b.total - a.total);
-    if (!busted.length) return;
-    const remaining = t.players.filter((p) => p.stack > 0).length;
+    const remaining = t.players.filter(alive).length;
+    if (!busted.length && remaining > 1) return;
     busted.forEach((p, i) => {
       const pot = result.pots.find((x) => x.eligible?.includes(p.seat)) ?? result.pots[0];
-      p.place = remaining + 1 + i;
+      p.place = Math.max(remaining, 1) + 1 + i;
       p.eliminatedHand = h.no;
       p.eliminatedBy = pot?.winners?.[0];
       this.eliminations.push({ seat: p.seat, name: p.name, place: p.place, by: p.eliminatedBy });
@@ -852,29 +936,38 @@ export class Game extends EventEmitter {
     });
     const isHuman = (p) => p?.kind === 'human';
     const bustedHumans = busted.filter(isHuman);
-    const humansAlive = t.players.filter((p) => isHuman(p) && p.stack > 0 && !p.sittingOut);
+    const humansAlive = t.players.filter((p) => isHuman(p) && alive(p));
     // One defeat screen per hand: prefer an AI a human knocked out.
     const shown = busted.filter((p) => p.kind === 'ai').sort((a, b) => (isHuman(t.players[b.eliminatedBy]) ? 1 : 0) - (isHuman(t.players[a.eliminatedBy]) ? 1 : 0))[0];
     if (shown && !bustedHumans.length && remaining > 1) this.knockOut(shown);
     if (bustedHumans.length && !humansAlive.length && !this.spectating) {
       // The last human is out: the game is over for the people at the table (they may watch the AIs finish).
       this.finish('defeat', bustedHumans.sort((a, b) => a.place - b.place)[0]);
-    } else if (remaining === 1) {
-      const winner = t.players.find((p) => p.stack > 0);
+    } else if (remaining <= 1) {
+      // Normally the last one alive; if only a departed guest still holds chips, they take the title.
+      const winner = t.players.find(alive) ?? t.players.find((p) => p.stack > 0);
       winner.place = 1;
       this.spectating = false;
       this.finish(isHuman(winner) ? 'victory' : 'champion', winner);
     } else for (const p of bustedHumans) this.personalDefeat(p);
   }
 
+  defeatStyle() {
+    return this.config.defeatStyle === 'classic' ? 'classic' : 'flirty';
+  }
+
+  // A player's cards and hand name as shown down in the last hand (null when they were not shown).
+  revealOf(seat) {
+    return this.lastResult?.reveals?.find((r) => r.seat === seat) ?? null;
+  }
+
   // A human busts while other humans play on: a defeat screen just for them.
   personalDefeat(p) {
     const h = this.table.hand;
-    const reveal = (seat) => this.lastResult?.reveals?.find((r) => r.seat === seat);
     const rival = this.table.players[p.eliminatedBy];
     const out = {
       type: 'defeat',
-      style: this.config.defeatStyle === 'classic' ? 'classic' : 'flirty',
+      style: this.defeatStyle(),
       subject: p.seat,
       place: p.place,
       players: this.table.players.length,
@@ -882,18 +975,20 @@ export class Game extends EventEmitter {
       rival: rival?.seat,
       board: h.board.slice(),
       myHole: p.hole.slice(),
-      myHand: reveal(p.seat)?.hand ?? null,
-      rivalHole: reveal(rival?.seat)?.hole ?? null,
-      rivalHand: reveal(rival?.seat)?.hand ?? null,
+      myHand: this.revealOf(p.seat)?.hand ?? null,
+      rivalHole: this.revealOf(rival?.seat)?.hole ?? null,
+      rivalHand: this.revealOf(rival?.seat)?.hand ?? null,
       peakStack: p.peakStack,
       handsPlayed: p.handsPlayed,
       handsWon: p.handsWon,
       taunt: null,
     };
     p.out = out;
+    const gameId = this.gameId;
     this.fetchTaunt('defeat', rival, out, p).then(({ say, penalty }) => {
       out.taunt = say;
       out.penalty = penalty;
+      if (this.gameId !== gameId) return;
       this.emit('personalDefeat', { player: p, out });
       this.changed();
     });
@@ -905,7 +1000,6 @@ export class Game extends EventEmitter {
     if (this.table.live().length < 2) return { ok: false, error: '桌上只剩一个人了' };
     this.spectating = true;
     this.spectatePaused = false;
-    this.defeat = this.gameOver;
     this.gameOver = null;
     this.status = 'handOver';
     this.save();
@@ -917,16 +1011,22 @@ export class Game extends EventEmitter {
   setSpectatePaused(paused) {
     if (!this.spectating) return { ok: false, error: '现在没有在观战' };
     this.spectatePaused = Boolean(paused);
+    // A next hand that was already scheduled must not be dealt while paused.
+    if (this.spectatePaused) {
+      clearTimeout(this.autoTimer);
+      this.autoNextAt = null;
+    }
+    this.save();
     this.changed();
-    if (!paused && !this.running && this.status === 'handOver') this.nextHand('spectate');
+    if (!this.spectatePaused && !this.running && this.status === 'handOver') this.nextHand('spectate');
     return { ok: true };
   }
 
-  // Every AI that busts gets its own defeat screen (the game goes on). `by` is the seat that took her last chips.
+  // Every AI that busts gets its own defeat screen (the game goes on). `by` is the seat that took her last chips
+  // (always a pot winner at a showdown, so their cards were shown).
   knockOut(p) {
     const h = this.table.hand;
-    const reveal = (seat) => this.lastResult?.reveals?.find((r) => r.seat === seat);
-    const by = p.eliminatedBy ?? 0;
+    const by = p.eliminatedBy;
     const k = {
       seat: p.seat,
       by,
@@ -934,22 +1034,33 @@ export class Game extends EventEmitter {
       handNo: h.no,
       place: p.place,
       players: this.table.players.length,
-      style: this.config.defeatStyle === 'classic' ? 'classic' : 'flirty',
-      myHole: reveal(by)?.hole ?? (by === 0 ? this.human.hole.slice() : null),
-      myHand: reveal(by)?.hand ?? null,
-      theirHole: reveal(p.seat)?.hole ?? null,
-      theirHand: reveal(p.seat)?.hand ?? null,
+      style: this.defeatStyle(),
+      myHole: this.revealOf(by)?.hole ?? null,
+      myHand: this.revealOf(by)?.hand ?? null,
+      theirHole: this.revealOf(p.seat)?.hole ?? null,
+      theirHand: this.revealOf(p.seat)?.hand ?? null,
       board: h.board.slice(),
       line: null,
       reward: null,
     };
     this.knockout = k;
+    this.requestKnockoutLine(p, k, true);
+  }
+
+  // Fetches the knocked-out character's line. It may arrive after the next hand or a new game started:
+  // the line is only remembered in the game it belongs to, and only announced while still on screen.
+  requestKnockoutLine(p, k, remember) {
+    const gameId = this.gameId;
     this.fetchKnockoutLine(p, k).then(({ line, reward }) => {
       k.line = line;
       k.reward = reward;
-      this.talk.push({ hand: k.handNo, seat: p.seat, name: p.name, kind: 'ko', say: line });
-      this.trimTalk();
+      if (this.gameId !== gameId) return;
+      if (remember) {
+        this.talk.push({ hand: k.handNo, seat: p.seat, name: p.name, kind: 'ko', say: line });
+        this.trimTalk();
+      }
       this.save();
+      if (this.knockout !== k) return;
       this.emit('knockout', k);
       this.changed();
     });
@@ -964,10 +1075,9 @@ export class Game extends EventEmitter {
         : { line: '这把算你狠，下一局我会回来的。' }
       : { line: `${winner?.name ?? '你'}……给我记住，下一局一定讨回来！` };
     if (!p.model) return fallback;
-    const cards = (cs) => (cs?.length ? cs.map(cardLabel).join(' ') : '未亮牌');
     const role = p.persona ? `你的角色形象（${p.title ?? p.name}）：${p.persona}\n` : '';
-    const who = k.byHuman ? `人类玩家「${winner?.name ?? '你'}」` : `${winner?.name}${winner?.title ? `（${winner.title}）` : ''}`;
-    const situation = `德州扑克淘汰赛第 ${k.handNo} 手，你（${p.name}）被${who}打到筹码归零，淘汰出局，最终第 ${k.place} 名。你的牌 ${cards(k.theirHole)}${k.theirHand ? `（${k.theirHand}）` : ''}，对方的牌 ${cards(k.myHole)}${k.myHand ? `（${k.myHand}）` : ''}，公共牌 ${cards(k.board)}。`;
+    const who = k.byHuman ? `人类玩家「${shownName(winner?.name, winner?.seat === 0)}」` : `${winner?.name}${winner?.title ? `（${winner.title}）` : ''}`;
+    const situation = `德州扑克淘汰赛第 ${k.handNo} 手，你（${p.name}）被${who}打到筹码归零，淘汰出局，最终第 ${k.place} 名。你的牌 ${cardsText(k.theirHole)}${k.theirHand ? `（${k.theirHand}）` : ''}，对方的牌 ${cardsText(k.myHole)}${k.myHand ? `（${k.myHand}）` : ''}，公共牌 ${cardsText(k.board)}。`;
     const ask = !k.byHuman
       ? `这是你的战败画面，人类玩家在一旁看着。用你的人设说一句不甘心又带点羞恼的出局台词（中文，40 字以内），可以冲着淘汰你的${winner?.name ?? '对手'}放句狠话，也可以对观战的人类撒个娇。可以调情，但不要露骨，不涉及性行为或裸露。`
       : flirty
@@ -981,8 +1091,7 @@ export class Game extends EventEmitter {
         `${role}${situation}${ask}\n只输出 JSON：${withReward ? '{"say": "...", "reward": "..."}' : '{"say": "..."}'}`,
         this.table.players.length,
       );
-      const clean = (x, n) => (typeof x === 'string' && x.trim() ? x.trim().slice(0, n) : null);
-      return { line: clean(d.say, 80) ?? fallback.line, reward: withReward ? (clean(d.reward, 60) ?? fallback.reward) : undefined };
+      return { line: cleanLine(d.say, 80) ?? fallback.line, reward: withReward ? (cleanLine(d.reward, 60) ?? fallback.reward) : undefined };
     } catch (e) {
       this.log(`[game] knockout line failed: ${e?.message ?? e}`);
       return fallback;
@@ -994,7 +1103,6 @@ export class Game extends EventEmitter {
     const t = this.table;
     const h = t.hand;
     const me = type === 'champion' ? this.human : (subject ?? this.human);
-    const reveal = (seat) => this.lastResult?.reveals?.find((r) => r.seat === seat);
     const rival =
       type === 'champion'
         ? subject
@@ -1004,6 +1112,7 @@ export class Game extends EventEmitter {
     this.status = 'gameOver';
     this.gameOver = {
       type,
+      style: this.defeatStyle(),
       subject: subject?.seat ?? me.seat,
       place: me.place,
       players: t.players.length,
@@ -1011,28 +1120,33 @@ export class Game extends EventEmitter {
       rival: rival?.seat,
       board: h.board.slice(),
       myHole: me.hole.slice(),
-      myHand: reveal(me.seat)?.hand ?? null,
-      rivalHole: reveal(rival?.seat)?.hole ?? null,
-      rivalHand: reveal(rival?.seat)?.hand ?? null,
+      myHand: this.revealOf(me.seat)?.hand ?? null,
+      rivalHole: this.revealOf(rival?.seat)?.hole ?? null,
+      rivalHand: this.revealOf(rival?.seat)?.hand ?? null,
       peakStack: me.peakStack,
       handsPlayed: me.handsPlayed,
       handsWon: me.handsWon,
       taunt: null,
     };
-    const no = h.no;
-    this.gameOver.style = this.config.defeatStyle === 'classic' ? 'classic' : 'flirty';
-    this.fetchTaunt(type, rival, this.gameOver, me).then(({ say, penalty }) => {
-      if (!this.gameOver || this.gameOver.handNo !== no) return;
-      this.gameOver.taunt = say;
-      this.gameOver.penalty = penalty;
+    this.requestTaunt(this.gameOver, me);
+  }
+
+  // The rival's closing line for a game-over screen. Still announced when the host went on to spectate
+  // before it arrived (the defeat result is posted late rather than never).
+  requestTaunt(go, subject) {
+    const gameId = this.gameId;
+    this.fetchTaunt(go.type, this.table.players[go.rival], go, subject).then(({ say, penalty }) => {
+      go.taunt = say;
+      go.penalty = penalty;
+      if (this.gameId !== gameId || (this.gameOver !== go && !(this.spectating && go.type === 'defeat'))) return;
       this.save();
-      this.emit('gameOver', this.gameOver);
+      this.emit('gameOver', go);
       this.changed();
     });
   }
 
   async fetchTaunt(type, rival, g = this.gameOver, subject = this.human) {
-    const human = `人类玩家「${subject?.name ?? '你'}」`;
+    const human = `人类玩家「${shownName(subject?.name, (subject?.seat ?? 0) === 0) ?? '房主'}」`;
     const flirty = g.style === 'flirty';
     const fallback =
       type === 'champion'
@@ -1047,15 +1161,14 @@ export class Game extends EventEmitter {
           ? { say: '哼……这次就让你赢好了，别得意太久哦。', penalty: '作为奖励，下一局我第一手不加注你。' }
           : { say: '……这把算你狠。下一局我不会再手软。' };
     if (!rival?.model) return fallback;
-    const cards = (cs) => (cs?.length ? cs.map(cardLabel).join(' ') : '未亮牌');
-    const mine = `${cards(g.rivalHole)}${g.rivalHand ? `（${g.rivalHand}）` : ''}`;
-    const theirs = `${cards(g.myHole)}${g.myHand ? `（${g.myHand}）` : ''}`;
+    const mine = `${cardsText(g.rivalHole)}${g.rivalHand ? `（${g.rivalHand}）` : ''}`;
+    const theirs = `${cardsText(g.myHole)}${g.myHand ? `（${g.myHand}）` : ''}`;
     const role = rival.persona ? `你的角色形象（${rival.title ?? rival.name}）：${rival.persona}\n` : '';
     const situation =
       type === 'champion'
         ? `德州扑克淘汰赛打到第 ${g.handNo} 手，你（${rival.name}）把其他 AI 全部淘汰，赢下整张桌子成为冠军。人类玩家早就出局了，一直在旁边观战。`
         : type === 'defeat'
-          ? `德州扑克淘汰赛第 ${g.handNo} 手，你（${rival.name}）把${human}打到筹码归零，对方被淘汰出局，最终第 ${g.place} 名。你的牌 ${mine}，对方的牌 ${theirs}，公共牌 ${cards(g.board)}。`
+          ? `德州扑克淘汰赛第 ${g.handNo} 手，你（${rival.name}）把${human}打到筹码归零，对方被淘汰出局，最终第 ${g.place} 名。你的牌 ${mine}，对方的牌 ${theirs}，公共牌 ${cardsText(g.board)}。`
           : `德州扑克淘汰赛打到最后，你（${rival.name}）是最后一个被${human}淘汰的对手，对方赢下了整张桌子。`;
     const ask =
       type === 'champion'
@@ -1076,8 +1189,7 @@ export class Game extends EventEmitter {
         `${role}${situation}${ask}\n只输出 JSON：${flirty ? '{"say": "...", "penalty": "..."}' : '{"say": "..."}'}`,
         this.table.players.length,
       );
-      const clean = (x, n) => (typeof x === 'string' && x.trim() ? x.trim().slice(0, n) : null);
-      return { say: clean(d.say, 80) ?? fallback.say, penalty: flirty ? (clean(d.penalty, 60) ?? fallback.penalty) : undefined };
+      return { say: cleanLine(d.say, 80) ?? fallback.say, penalty: flirty ? (cleanLine(d.penalty, 60) ?? fallback.penalty) : undefined };
     } catch (e) {
       this.log(`[game] taunt failed: ${e?.message ?? e}`);
       return fallback;
@@ -1094,14 +1206,13 @@ export class Game extends EventEmitter {
     }
   }
 
+  // One line per finished hand for the AIs' "recent results" (so the host is 房主, never 「你」).
   summarize(result) {
     const t = this.table;
     const h = t.hand;
-    const parts = result.pots.map((pot) => {
-      const names = pot.winners.map((s) => t.players[s].name).join('、');
-      return `${names} 赢得 ${pot.amount}${pot.hand ? `（${pot.hand}）` : '（其他人弃牌）'}`;
-    });
-    const shown = result.reveals.map((r) => `${t.players[r.seat].name} 亮出 ${r.hole.map(cardLabel).join(' ')}`).join('；');
+    const who = (s) => shownName(t.players[s].name, s === 0);
+    const parts = result.pots.map((pot) => `${pot.winners.map(who).join('、')} 赢得 ${pot.amount}${pot.hand ? `（${pot.hand}）` : '（其他人弃牌）'}`);
+    const shown = result.reveals.map((r) => `${who(r.seat)} 亮出 ${r.hole.map(cardLabel).join(' ')}`).join('；');
     const board = h.board.length ? `公共牌 ${h.board.map(cardLabel).join(' ')}，` : '';
     return `第 ${h.no} 手：${board}${parts.join('；')}${shown ? `。摊牌：${shown}` : ''}`;
   }
@@ -1114,7 +1225,7 @@ export class Game extends EventEmitter {
     const h = t.hand;
     // Spectators (after you bust) see every hole card, like a TV broadcast.
     const showAll = this.config.revealAllCards === true || (this.spectating && !humanInHand);
-    const labels = h ? positionLabels(t.viewFor(null)) : {};
+    const labels = h ? positionLabels({ players: t.players, sbSeat: h.sbSeat, bbSeat: h.bbSeat, button: h.button }) : {};
     return {
       gameId: this.gameId,
       status: this.status,
@@ -1122,7 +1233,7 @@ export class Game extends EventEmitter {
       smallBlind: t.smallBlind,
       serverNow: Date.now(),
       stats: Object.values(this.stats ?? {}),
-      scene: this.sceneArt(),
+      scene: this.scene ?? null,
       blindLevel: this.blinds?.level ?? 1,
       autoNextHandMs: this.config.autoNextHandMs ?? 0,
       autoNextAt: this.autoNextAt ?? null,
@@ -1168,7 +1279,6 @@ export class Game extends EventEmitter {
         guest: p.guest || undefined,
         sittingOut: p.sittingOut || undefined,
         lastAction: p.lastAction && h && p.lastAction.street === h.street ? { ...p.lastAction, text: describeAction(p.lastAction) } : null,
-        lastSay: p.lastAction?.say ?? null,
         lastChat: p.lastChat && h && p.lastChat.street === h.street ? p.lastChat : null,
         buyIns: p.buyIns,
         net: p.stack - p.buyIns * this.config.startingStack,
@@ -1185,7 +1295,6 @@ export class Game extends EventEmitter {
       eliminationMode: this.eliminationMode(),
       spectating: this.spectating,
       spectatePaused: this.spectatePaused,
-      defeat: this.defeat,
       log: (h?.log ?? []).map((e) => ({ ...e, text: describeAction(e) })),
       result: this.lastResult,
       recent: this.recent.slice(-8),

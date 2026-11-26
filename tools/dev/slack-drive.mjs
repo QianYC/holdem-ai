@@ -1,21 +1,24 @@
 // Plays one hand as the human through simulated Slack thread replies, then prints the thread.
 // usage: node tools/dev/slack-drive.mjs [text|button]   (needs a running game with a Slack thread open)
-import fs from 'node:fs';
-import { loadConfig } from '../lib.mjs';
+import { bridgeToken, gameUrl, loadConfig } from '../lib.mjs';
 
 const cfg = loadConfig();
-const token = fs.readFileSync(cfg.slack.bridgeTokenFile, 'utf8').trim();
-const base = `http://127.0.0.1:${cfg.port ?? 3095}`;
+const token = bridgeToken(cfg);
+const base = gameUrl(cfg);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const state = () => fetch(`${base}/state`).then((r) => r.json());
 const hook = (payload) =>
   fetch(`${base}/slack/hook`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-bridge-token': token }, body: JSON.stringify(payload) }).then((r) => r.status);
 const bridge = (method, params) =>
-  fetch(`${cfg.slack.bridgeUrl}/api`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-bridge-token': token }, body: JSON.stringify({ method, params }) }).then((r) => r.json());
+  fetch(`${cfg.slack?.bridgeUrl ?? 'http://127.0.0.1:3091'}/api`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-bridge-token': token }, body: JSON.stringify({ method, params }) }).then((r) => r.json());
 
 let s = await state();
+if (!s.slack) {
+  console.log('no Slack thread is open: click 同步到 Slack in the page (or send 德扑 in Slack) first');
+  process.exit(1);
+}
 const { channel, ts } = s.slack;
-const say = (text) => hook({ type: 'message', text, channel, ts: String(Date.now() / 1000), thread_ts: ts, user: cfg.slack.mention });
+const say = (text) => hook({ type: 'message', text, channel, ts: String(Date.now() / 1000), thread_ts: ts, user: cfg.slack?.mention });
 const mode = process.argv[2] ?? 'text';
 if (s.status !== 'playing') await say('下一手');
 let n = 0;

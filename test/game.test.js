@@ -77,7 +77,7 @@ test('busted players are eliminated for good and the game ends', { timeout: 1200
 });
 
 test('auto next hand deals the next hand by itself', { timeout: 60000 }, async () => {
-  const game = new Game({ ...config(), autoNextHandMs: 30 }, { log: () => {} });
+  const game = new Game({ ...config(), autoNextHandMs: 30, knockoutDelayMs: 0 }, { log: () => {} });
   game.on('humanTurn', ({ legal, turnId }) => setImmediate(() => game.act(legal.canCheck ? 'check' : 'fold', 0, 'test', turnId)));
   game.nextHand('test');
   const deadline = Date.now() + 20000;

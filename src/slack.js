@@ -43,19 +43,19 @@ const HELP =
 // Talks to Slack only through a local Slack bridge (see README: POST /api, POST /hook), which also forwards owner
 // messages in our threads, our top-level trigger, and our button clicks to POST /slack/hook.
 export class SlackMirror {
-  constructor(game, cfg, { port, log = console.log, serverScript }) {
+  constructor(game, cfg, { port, log = console.log, serverScript, publicDir }) {
     this.game = game;
     this.cfg = cfg;
     this.port = port;
     this.log = log;
     this.serverScript = serverScript;
+    this.publicDir = publicDir ?? (serverScript ? path.join(path.dirname(path.dirname(serverScript)), 'public') : null);
     this.thread = null;
     this.handMsg = null;
     this.turnMsg = null;
     this.nextMsg = null;
     this.chain = Promise.resolve();
     this.timer = null;
-    this.registered = false;
     this.statePath = cfg.stateFile;
     try {
       this.thread = JSON.parse(fs.readFileSync(this.statePath, 'utf8')).thread ?? null;
@@ -75,11 +75,19 @@ export class SlackMirror {
     }
   }
 
+  // The bridge token only ever goes to a bridge on this machine.
   async bridge(route, body) {
-    const res = await fetch(`${this.cfg.bridgeUrl.replace(/\/$/, '')}${route}`, {
+    const base = String(this.cfg.bridgeUrl ?? '').replace(/\/+$/, '');
+    let host = '';
+    try {
+      host = new URL(base).hostname;
+    } catch {}
+    if (!['127.0.0.1', 'localhost', '[::1]'].includes(host)) throw new Error(`slack.bridgeUrl 必须是本机地址（现在是 ${base || '空'}）`);
+    const res = await fetch(`${base}${route}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-bridge-token': this.token() },
       body: JSON.stringify(body),
+      redirect: 'error',
       signal: AbortSignal.timeout(15000),
     });
     const json = await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }));
@@ -99,7 +107,6 @@ export class SlackMirror {
       start: this.serverScript ? { cmd: process.execPath, args: [this.serverScript], cwd: path.dirname(path.dirname(this.serverScript)) } : undefined,
       ...extra,
     });
-    this.registered = true;
   }
 
   async registerWithRetry() {
@@ -126,7 +133,9 @@ export class SlackMirror {
     return this.chain;
   }
 
+  // Both act on the thread current when they run (queued work may outlive stop()): without one they do nothing.
   post(text, blocks) {
+    if (!this.thread) return Promise.resolve({});
     return this.api('chat.postMessage', {
       channel: this.thread.channel,
       thread_ts: this.thread.ts,
@@ -138,12 +147,22 @@ export class SlackMirror {
   }
 
   update(ts, text, blocks) {
+    if (!this.thread || !ts) return Promise.resolve({});
     return this.api('chat.update', { channel: this.thread.channel, ts, text, blocks: blocks ?? [] });
   }
 
   bind() {
     const g = this.game;
-    g.on('handStart', () => {
+    // Listeners run inside the game's own events: a Slack formatting bug must never abort a hand or a turn.
+    const on = (ev, fn) =>
+      g.on(ev, (...args) => {
+        try {
+          fn(...args);
+        } catch (e) {
+          this.log(`[slack] ${ev} handler failed: ${e?.stack ?? e}`);
+        }
+      });
+    on('handStart', () => {
       if (!this.thread) return;
       const no = g.table.handNo;
       this.closeNext(`▶ 第 ${no} 手开始`);
@@ -153,13 +172,13 @@ export class SlackMirror {
         msg.ts = (await this.post(this.handText())).ts;
       });
     });
-    for (const ev of ['dealt', 'street', 'action']) g.on(ev, () => this.thread && this.scheduleHandUpdate());
-    g.on('action', ({ entry }) => {
+    for (const ev of ['dealt', 'street', 'action']) on(ev, () => this.thread && this.scheduleHandUpdate());
+    on('action', ({ entry }) => {
       if (!this.thread || entry.seat !== 0 || entry.action === 'chat' || !this.turnMsg) return;
       const via = g.lastHumanSource === 'slack' ? '' : '（在网页上）';
       this.closeTurn(`✅ 你${via}：${describeAction(entry)}`);
     });
-    g.on('humanTurn', ({ legal, turnId, player }) => {
+    on('humanTurn', ({ legal, turnId, player }) => {
       if (!this.thread || player.seat !== 0) return;
       this.flushHandUpdate();
       const { text, blocks } = this.turnMessage(legal, turnId);
@@ -169,31 +188,31 @@ export class SlackMirror {
         msg.ts = (await this.post(text, blocks)).ts;
       });
     });
-    g.on('quickReplies', ({ turnId, items }) => {
+    on('quickReplies', ({ turnId, items }) => {
       const msg = this.turnMsg;
       if (!this.thread || !msg || msg.turnId !== turnId) return;
       const { text, blocks } = this.turnMessage(msg.legal, turnId, items);
       this.enqueue(() => msg.ts && this.turnMsg === msg && this.update(msg.ts, text, blocks));
     });
-    g.on('seatSwap', ({ from, to }) => {
+    on('seatSwap', ({ from, to }) => {
       if (this.thread) this.reply(`🔄 *${from.name}*（${from.model}）离席，*${to.name}*（${to.model}）接手了她的座位和筹码。`);
     });
-    g.on('handEnd', () => {
+    on('handEnd', () => {
       if (!this.thread) return;
       this.flushHandUpdate();
     });
-    g.on('spectate', () => {
+    on('spectate', () => {
       if (!this.thread) return;
       const alive = g.table.players.filter((p) => p.stack > 0).map((p) => p.name);
       this.reply(`👀 *观战模式*：剩下的 ${alive.length} 个 AI（${alive.join('、')}）血战到底，每手自动开始。观战视角能看到所有人的底牌，每手的每一轮行动都会实时更新在这里。回复 \`暂停\` / \`继续\`，也可以 \`说 …\` 在场边喊话。`);
     });
-    g.on('change', () => {
+    on('change', () => {
       if (this.thread && g.status === 'handOver' && !g.running && !g.spectating && !this.nextMsg && this.handMsg?.no === g.table.handNo) {
         this.flushHandUpdate();
         this.postNext();
       }
     });
-    g.on('knockout', (k) => {
+    on('knockout', (k) => {
       if (!this.thread) return;
       this.flushHandUpdate();
       const { text, blocks } = this.knockoutMessage(k);
@@ -201,7 +220,7 @@ export class SlackMirror {
       this.enqueue(() => this.post(text, blocks));
       if (p?.media?.lose) this.enqueue(() => this.uploadImage(p.media.lose, `${p.name} 战败`));
     });
-    g.on('gameOver', (over) => {
+    on('gameOver', (over) => {
       if (!this.thread) return;
       this.flushHandUpdate();
       const { text, blocks } = this.gameOverMessage(over);
@@ -210,7 +229,7 @@ export class SlackMirror {
       const pose = over.type === 'victory' ? rival?.media?.lose : rival?.media?.win;
       if (pose) this.enqueue(() => this.uploadImage(pose, `${rival.name} ${over.type === 'victory' ? '战败' : '胜利'}`));
     });
-    g.on('newGame', () => {
+    on('newGame', () => {
       this.closeTurn('⏹ 牌局已重开');
       this.closeNext('⏹ 新的一局开始了');
       this.handMsg = null;
@@ -389,16 +408,31 @@ export class SlackMirror {
       .join('\n');
   }
 
+  // Local file under public/ for a web path such as "/characters/opus/lose.png?v=123" (null when missing or outside).
+  localFile(webPath) {
+    if (!webPath || !this.publicDir) return null;
+    let rel;
+    try {
+      rel = decodeURIComponent(String(webPath).split(/[?#]/)[0]).replace(/^\/+/, '');
+    } catch {
+      return null;
+    }
+    const file = path.resolve(this.publicDir, ...rel.split('/'));
+    const inside = path.relative(this.publicDir, file);
+    if (!inside || inside.startsWith('..') || path.isAbsolute(inside) || !fs.existsSync(file)) return null;
+    return file;
+  }
+
   // Uploads a local image into the thread (files.getUploadURLExternal → POST bytes → completeUploadExternal).
   async uploadImage(webPath, title) {
-    if (!webPath || !this.serverScript) return;
-    const file = path.join(path.dirname(path.dirname(this.serverScript)), 'public', ...decodeURIComponent(webPath).replace(/^\//, '').split('/'));
-    if (!fs.existsSync(file)) return;
+    const file = this.localFile(webPath);
+    const thread = this.thread;
+    if (!file || !thread) return;
     const bytes = fs.readFileSync(file);
     const { upload_url, file_id } = await this.api('files.getUploadURLExternal', { filename: path.basename(file), length: bytes.length });
     const res = await fetch(upload_url, { method: 'POST', body: bytes, signal: AbortSignal.timeout(60000) });
     if (!res.ok) throw new Error(`upload ${res.status}`);
-    await this.api('files.completeUploadExternal', { files: JSON.stringify([{ id: file_id, title }]), channel_id: this.thread.channel, thread_ts: this.thread.ts });
+    await this.api('files.completeUploadExternal', { files: JSON.stringify([{ id: file_id, title }]), channel_id: thread.channel, thread_ts: thread.ts });
   }
 
   knockoutMessage(k) {
@@ -463,9 +497,10 @@ export class SlackMirror {
           block_id: `over-${over.handNo}`,
           elements: [
             ...(over.type === 'defeat' && s.players.filter((p) => p.stack > 0).length >= 2
-              ? [{ type: 'button', text: { type: 'plain_text', text: '👀 继续观战（AI 血战到底）' }, action_id: 'hook:poker:spectate', value: 'spectate' }]
+              ? [{ type: 'button', text: { type: 'plain_text', text: '👀 继续观战（AI 血战到底）' }, action_id: 'hook:poker:spectate', value: JSON.stringify({ g: this.game.gameId }) }]
               : []),
-            { type: 'button', text: { type: 'plain_text', text: '🔄 再来一局' }, action_id: 'hook:poker:newgame', value: 'newgame', style: 'primary' },
+            // Bound to this game: a leftover button must not reset a later game.
+            { type: 'button', text: { type: 'plain_text', text: '🔄 再来一局' }, action_id: 'hook:poker:newgame', value: JSON.stringify({ g: this.game.gameId }), style: 'primary' },
           ],
         },
       ],
@@ -498,42 +533,56 @@ export class SlackMirror {
   }
 
   // Start (or move) the mirror into a new thread in `channel`.
-  async openThread(channel, { replyTo } = {}) {
+  // Runs inside the queue. Game events during its awaits may already set handMsg / turnMsg / nextMsg (their posts are
+  // queued behind this and land in the new thread): those are not posted twice.
+  async openThread(channel) {
     const g = this.game;
     const s = g.state();
     const lineup = this.seating();
     const text = `*♠♥ 德州扑克 · 你 vs ${s.players.length - 1} 个 AI ♦♣*\n盲注 ${s.smallBlind}/${s.bigBlind}，起始筹码 ${fmt(s.startingStack)}\n${lineup}\n本地网页：http://127.0.0.1:${this.port}  （网页和 Slack 同步，哪边操作都行）\n👇 牌局在这个线程里进行`;
-    if (this.turnMsg) {
-      const msg = this.turnMsg;
-      this.turnMsg = null;
-      await this.update(msg.ts, '↪ 牌局已移到新的线程').catch(() => {});
-    }
-    if (this.nextMsg?.ts) await this.update(this.nextMsg.ts, '↪ 牌局已移到新的线程').catch(() => {});
+    const oldTurn = this.turnMsg;
+    const oldNext = this.nextMsg;
+    this.turnMsg = null;
     this.nextMsg = null;
-    const r = await this.api('chat.postMessage', { channel, text, unfurl_links: false, unfurl_media: false, ...(replyTo ? {} : {}) });
+    this.handMsg = null;
+    if (oldTurn?.ts) await this.update(oldTurn.ts, '↪ 牌局已移到新的线程').catch(() => {});
+    if (oldNext?.ts) await this.update(oldNext.ts, '↪ 牌局已移到新的线程').catch(() => {});
+    const r = await this.api('chat.postMessage', { channel, text, unfurl_links: false, unfurl_media: false });
     let link;
     try {
       link = (await this.api('chat.getPermalink', { channel, message_ts: r.ts })).permalink;
     } catch {}
     this.thread = { channel, ts: r.ts, link };
-    this.handMsg = null;
     this.saveState();
     await this.register({ addThread: `${channel}:${r.ts}` });
     await this.post(HELP);
     if (g.status === 'playing') {
-      const p = await this.post(this.handText());
-      this.handMsg = { no: g.table.handNo, ts: p.ts };
-      if (g.pending) {
-        const quick = g.quick?.turnId === g.pending.turnId ? (g.quick.items ?? 'loading') : null;
-        const { text: t2, blocks } = this.turnMessage(g.pending.legal, g.pending.turnId, quick);
-        const m = await this.post(t2, blocks);
-        this.turnMsg = { ts: m.ts, turnId: g.pending.turnId, legal: g.pending.legal };
+      if (!this.handMsg) {
+        const msg = { no: g.table.handNo, ts: null };
+        this.handMsg = msg;
+        msg.ts = (await this.post(this.handText())).ts;
+      }
+      const pending = g.pending;
+      // Only the host's own turn gets buttons here (LAN guests play in their browser).
+      if (pending && pending.seat === 0 && !this.turnMsg) {
+        const quick = g.quick?.turnId === pending.turnId ? (g.quick.items ?? 'loading') : null;
+        const { text: t2, blocks } = this.turnMessage(pending.legal, pending.turnId, quick);
+        const msg = { ts: null, turnId: pending.turnId, legal: pending.legal };
+        this.turnMsg = msg;
+        msg.ts = (await this.post(t2, blocks)).ts;
       }
     } else if (g.status === 'handOver') {
-      const p = await this.post(this.handText());
-      this.handMsg = { no: g.table.handNo, ts: p.ts };
-      const { text: t3, blocks } = this.nextMessage();
-      this.nextMsg = { ts: (await this.post(t3, blocks)).ts };
+      if (!this.handMsg) {
+        const msg = { no: g.table.handNo, ts: null };
+        this.handMsg = msg;
+        msg.ts = (await this.post(this.handText())).ts;
+      }
+      if (!this.nextMsg) {
+        const { text: t3, blocks } = this.nextMessage();
+        const msg = { ts: null };
+        this.nextMsg = msg;
+        msg.ts = (await this.post(t3, blocks)).ts;
+      }
     } else if (g.status === 'gameOver' && g.gameOver) {
       await this.post(this.handText());
       const { text: t4, blocks } = this.gameOverMessage(g.gameOver);
@@ -596,15 +645,18 @@ export class SlackMirror {
         } catch {}
         cmd = { kind: 'act', action: v.a, amount: v.n, turnId: v.t };
       } else if (id === 'hook:poker:next') cmd = { kind: 'next' };
-      else if (id === 'hook:poker:spectate') {
-        await this.api('chat.update', { channel: p.channel, ts: p.message_ts, text: '👀 已进入观战模式', blocks: [] }).catch(() => {});
-        cmd = { kind: 'spectate' };
-      }
-      else if (id === 'hook:poker:rebuy') cmd = { kind: 'rebuy' };
-      else if (id === 'hook:poker:newgame') {
-        await this.api('chat.update', { channel: p.channel, ts: p.message_ts, text: '🔄 已开新局', blocks: [] }).catch(() => {});
-        cmd = { kind: 'newGame', start: true };
-      }
+      else if (id === 'hook:poker:spectate' || id === 'hook:poker:newgame') {
+        // Game-over buttons carry their game id; older ones (plain value) count only while that game-over is current.
+        let v = {};
+        try {
+          v = JSON.parse(p.value ?? '{}');
+        } catch {}
+        const fresh = v?.g ? v.g === g.gameId : g.status === 'gameOver';
+        const done = !fresh ? '⏹ 这条消息已过期（那一局已经结束了）' : id === 'hook:poker:newgame' ? '🔄 已开新局' : '👀 已进入观战模式';
+        await this.api('chat.update', { channel: p.channel, ts: p.message_ts, text: done, blocks: [] }).catch(() => {});
+        if (!fresh) return;
+        cmd = id === 'hook:poker:newgame' ? { kind: 'newGame', start: true } : { kind: 'spectate' };
+      } else if (id === 'hook:poker:rebuy') cmd = { kind: 'rebuy' };
       else if (id === 'hook:poker:board') cmd = { kind: 'board' };
       else return;
     } else cmd = parseCommandText(p.text);
@@ -635,7 +687,6 @@ export class SlackMirror {
       case 'auto': {
         g.setAutoNext(cmd.on ? (g.config.autoNextHandMs || 5000) : 0);
         this.reply(cmd.on ? `⏩ 已开启自动下一手：每手结束 ${Math.round((g.config.autoNextHandMs || 5000) / 1000)} 秒后自动发牌。回复 \`手动\` 关闭。` : '⏸ 已关闭自动下一手，回复 `下一手` 继续。');
-        if (cmd.on && g.status === 'handOver' && !g.running) g.scheduleAutoNext();
         return;
       }
       case 'pause': {

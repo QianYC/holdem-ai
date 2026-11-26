@@ -1,17 +1,18 @@
 // What the AI tools return: one hand seen from one player's seat (only cards that player may know).
+// Seat 0 is always the host, whose default name 「你」 is shown as 房主 (see shownName).
 import { cardLabel } from './cards.js';
+import { STREET_NAMES as STREET } from './engine.js';
 import { describeAction, positionLabels, shownName } from './ai.js';
 
-const STREET = { preflop: '翻牌前', flop: '翻牌', turn: '转牌', river: '河牌' };
 const cards = (cs) => (cs ?? []).filter(Boolean).map(cardLabel);
-const nameOf = (p) => shownName(p?.name, p && !p.model);
+const nameAt = (name, seat) => shownName(name, Number(seat) === 0);
 
 function actionsByStreet(log) {
   const out = {};
   for (const e of log ?? []) {
     const street = STREET[e.street] ?? e.street;
     (out[street] ??= []).push({
-      who: shownName(e.name, e.seat === 0),
+      who: nameAt(e.name, e.seat),
       ...(e.action === 'chat' ? { say: e.say } : { action: describeAction(e), ...(e.say ? { say: e.say } : {}), stackAfter: e.stack }),
       ...(e.emote ? { emote: e.emote } : {}),
     });
@@ -44,7 +45,7 @@ export function latestRound(view, me, legal, startStacks = {}) {
       .filter((p) => p.inHand)
       .map((p) => ({
         seat: p.seat,
-        name: nameOf(p),
+        name: nameAt(p.name, p.seat),
         model: p.model ?? '真人玩家',
         position: pos[p.seat],
         stack: p.stack,
@@ -69,7 +70,7 @@ export function historyRound(rec, seat) {
     const hole = rec.holesBySeat?.[s];
     return {
       seat: s,
-      name: shownName(nameBySeat[s], rec.humans?.includes(s) && s === 0),
+      name: nameAt(nameBySeat[s], s),
       model: rec.models?.[s] ?? '真人玩家',
       startStack: start,
       endStack: end,
@@ -86,10 +87,10 @@ export function historyRound(rec, seat) {
     players,
     actions: actionsByStreet(rec.log),
     result: (rec.result?.pots ?? []).map((pot) => ({
-      winners: pot.winners.map((w) => shownName(nameBySeat[w] ?? rec.log?.find((e) => e.seat === w)?.name, w === 0)),
+      winners: pot.winners.map((w) => nameAt(nameBySeat[w] ?? rec.log?.find((e) => e.seat === w)?.name, w)),
       amount: pot.amount,
       hand: pot.hand ?? '其他人弃牌',
     })),
-    showdown: (rec.result?.reveals ?? []).map((r) => ({ name: shownName(nameBySeat[r.seat], r.seat === 0), holeCards: cards(r.hole), hand: r.hand })),
+    showdown: (rec.result?.reveals ?? []).map((r) => ({ name: nameAt(nameBySeat[r.seat], r.seat), holeCards: cards(r.hole), hand: r.hand })),
   };
 }

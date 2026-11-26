@@ -1,7 +1,7 @@
 {
   "name": "holdem-ai",
   "version": "1.0.0",
-  "description": "Local No-Limit Texas Hold'em: you vs 7 AI players, each driven by a different LLM, with personas, stickers, table talk and optional Slack play.",
+  "description": "Local No-Limit Texas Hold'em: you (and LAN friends) vs 1-9 LLM-driven characters, with personas, stickers, table talk, procedural BGM and optional Slack play.",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -19,6 +19,8 @@
     "art:portraits": "node tools/art.mjs portraits",
     "art:poses": "node tools/art.mjs poses",
     "art:stickers": "node tools/art.mjs stickers",
-    "probe": "node tools/probe-models.mjs"
+    "art:scene": "node tools/art.mjs scene",
+    "probe": "node tools/probe-models.mjs",
+    "probe:tools": "node tools/probe-tools.mjs"
   }
 }

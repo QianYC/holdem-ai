@@ -67,7 +67,7 @@ npm start                               # 打开 http://127.0.0.1:3095
 
 Windows 可以直接双击 `start.cmd`（后台启动并打开浏览器）。
 
-先检查模型是否可用：`npm run probe`（向每个配置的模型发一道测试题，显示耗时和回答）。
+先检查模型是否可用：`npm run probe`（向 `llm.baseUrl` 上每个配置的模型发一道测试题，显示耗时和回答；用 `llm.providers` 的角色会跳过）。`npm run probe:tools` 检查这些模型能否做工具调用。
 
 > 没有 `config.json` 时会直接使用 `config.example.json`。API 密钥的查找顺序：`llm.apiKey` → 环境变量 `LOCAL_API_KEY` → copilot-api 本地配置文件 → `local`。
 
@@ -79,7 +79,7 @@ Windows 可以直接双击 `start.cmd`（后台启动并打开浏览器）。
 | 加注 | 预设（最小、½池、¾池、1池）+ 滑块，快捷键 `R` | 预设按钮，或回复 `加注 300`（加到本轮总额 300） |
 | 全下 | 「全下」按钮 | 按钮，或回复 `梭哈` |
 | 发言 | 底部输入框 / 快速发言按钮 | 回复 `说 你想说的话` / 快速发言按钮 |
-| 下一手 | 「下一手」 | 按钮，或回复 `下一手` |
+| 下一手 | 「下一手」，或勾选「自动下一手」（用设置里的间隔，默认 5 秒） | 按钮，或回复 `下一手` |
 | 出局后观战 | 结算画面「继续观战」 | 按钮，或回复 `观战`；`暂停` / `继续` |
 | 新的一局 | 右上角「新的一局」 | 回复 `新局` |
 
@@ -90,15 +90,23 @@ Windows 可以直接双击 `start.cmd`（后台启动并打开浏览器）。
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
-| `port` | 3095 | 网页端口（只监听 127.0.0.1） |
+| `port` | 3095 | 网页端口（只监听 127.0.0.1；开启局域网模式时监听所有网卡） |
+| `humanName` | `你` | 你（房主）的名字 |
 | `startingStack` / `smallBlind` / `bigBlind` | 2000 / 10 / 20 | 筹码与盲注 |
-| `eliminateBusted` | `true` | 淘汰赛；设为 `false` 变成可补码的现金桌（配合 `aiAutoRebuy`） |
+| `eliminateBusted` | `true` | 淘汰赛；设为 `false` 变成可补码的现金桌 |
+| `aiAutoRebuy` | `true` | 现金桌模式下 AI 输光自动补码 |
+| `revealAllCards` | `false` | 明牌模式：显示所有 AI 的底牌 |
 | `randomSeats` | `true` | 每次新局随机安排 AI 座位（你总在画面下方） |
 | `defeatStyle` | `flirty` | 结算画面风格：`flirty`（角色卡 + 撩人台词 + 惩罚游戏）或 `classic`（GAME OVER） |
 | `autoNextHandMs` | 0 | > 0 时一手结束后自动发下一手 |
 | `spectateDelayMs` | 3000 | 观战时每手之间的间隔 |
 | `minActionDelayMs` | 700 | AI 行动的最短展示时间 |
+| `knockoutDelayMs` | 12000 | 自动发牌时，K.O. 画面至少停留的时间 |
 | `quickReplies` / `quickReplyModel` | `true` / `gpt-6-luna` | 你的快速发言及生成它的（快）模型 |
+| `sideline` | 开启 | 场外互动：`{enabled, chance, cooldownMs, maxPerStreet}` |
+| `aiTools` | `true` | AI 用工具调用自己查牌局；`false` 把信息全部写进提示词 |
+| `talkMemory` | 300 | AI 能看到的之前几手的牌桌发言条数 |
+| `lan` | 关闭 | 局域网模式：`{enabled, password, turnTimeoutMs}`（朋友行动时限，默认 90000 毫秒） |
 | `llm.baseUrl` / `llm.apiKey` / `llm.timeoutMs` / `llm.maxOutputTokens` | | 模型接口 |
 | `imageModel` | `github-copilot/gpt-image-2.5-flare` | `npm run art` 用的图像模型 |
 | `stickers` | 6 种 | 表情包定义：`{id: {label, emoji, prompt}}` |
@@ -108,7 +116,7 @@ Windows 可以直接双击 `start.cmd`（后台启动并打开浏览器）。
 | `ai[]` | 9 个角色 | 1–9 个，见下 |
 | `slack` | 关闭 | 见「Slack 接入」 |
 
-这些都可以直接在网页的「⚙ 设置」里改。模型参数、人设、头像、表情等改完**从下一手起生效**；AI 名单、模型、起始筹码、盲注在**新的一局**生效（设置里有「保存并开新局」）；端口和 Slack 配置需要重启。
+这些大多可以直接在网页的「⚙ 设置」里改。换模型、模型参数、人设、头像、表情等改完**从下一手起生效**（新角色接手原座位的筹码）；AI 数量、起始筹码、盲注、你的名字在**新的一局**生效（设置里有「保存并开新局」）；局域网开关保存后立即生效；端口和 Slack 配置需要重启。
 
 ## 🔌 多个模型提供方
 
@@ -167,13 +175,13 @@ public/characters/<key>/
 自己画、自己找、或者让图像模型生成都行：
 
 ```bash
-npm run art                     # 全部：缺立绘的下载/生成 → 生成胜负姿势 → 生成表情包
+npm run art                     # 全部：缺立绘的下载/生成 → 胜负姿势 → 表情包 → 开始页场景（图很多，较慢）
 npm run art:portraits -- grok   # 只处理某个角色
 npm run art:stickers -- --force # 重新生成（覆盖已有文件）
-node tools/art.mjs scene        # 开始页场景：房间、牌桌、每个角色的入座图和荷官图（透明背景）
+npm run art:scene               # 只生成开始页场景：房间、牌桌、每个角色的入座图和荷官图（透明背景）
 ```
 
-表情包生成后是 1024px，Windows 上可以用 `powershell -File tools/shrink.ps1` 缩到 256px。
+表情包生成后是 1024px，Windows 上可以用 `powershell -File tools/shrink.ps1` 按比例缩到 256px（原图备份在 `data/art/stickers/`）。任何一张图生成失败时脚本以退出码 1 结束，设置页里会显示「失败」。
 
 ## 📶 局域网模式（多个真人同桌）
 
@@ -215,11 +223,14 @@ src/
   cards.js     牌型评估、蒙特卡洛胜率
   engine.js    牌局引擎（下注轮、边池、摊牌）
   ai.js        模型调用、提示词、快速发言、兜底策略
-  game.js      牌桌会话：淘汰 / 观战 / 存档 / 角色美术 / 结算台词
+  rounds.js    给 AI 查询用的牌局记录（本手 / 历史几手）
+  game.js      牌桌会话：淘汰 / 观战 / 存档 / 局域网玩家 / 角色美术 / 结算台词
+  settings.js  设置页的接口：读写 config.json、模型列表、上传 / 生成美术
   slack.js     Slack 镜像与指令解析
   server.js    HTTP + SSE
-public/        网页（app.js、audio.js 合成 BGM、style.css）
-tools/         art.mjs 美术流水线、probe-models.mjs、dev/ 调试脚本
+public/        网页：index.html、app.js（牌桌）、settings.js（设置页）、audio.js（合成 BGM）、style.css
+tools/         art.mjs 美术流水线、lib.mjs、probe-models.mjs / probe-tools.mjs 模型检查、shrink.ps1 缩表情包
+tools/dev/     调试脚本：drive.mjs（自动打几手）、hook.mjs / slack-drive.mjs（模拟 Slack）、probe-deepseek.mjs
 test/          node --test
 ```
 

@@ -1,10 +1,11 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Game } from './game.js';
-import { createSettingsApi } from './settings.js';
+import { createSettingsApi, readJson } from './settings.js';
 import { SlackMirror } from './slack.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -38,13 +39,14 @@ const settingsApi = createSettingsApi({
   savePath: process.env.HOLDEM_CONFIG ?? path.join(ROOT, 'config.json'),
   onSaved: () => listen(),
 });
+// Slack mirroring is opt-in (slack.enabled: true). Settings are read once at startup.
 const slackCfg = {
   bridgeUrl: 'http://127.0.0.1:3091',
   bridgeTokenFile: process.env.SLACK_BRIDGE_TOKEN_FILE ?? '',
   stateFile: path.join(DATA, 'slack-state.json'),
   ...(config.slack ?? {}),
 };
-const slack = config.slack?.enabled === false ? null : new SlackMirror(game, slackCfg, { port: PORT, log, serverScript: fileURLToPath(import.meta.url) });
+const slack = config.slack?.enabled === true ? new SlackMirror(game, slackCfg, { port: PORT, log, serverScript: fileURLToPath(import.meta.url), publicDir: PUBLIC }) : null;
 
 game.on('action', ({ entry, player }) => {
   if (player.kind === 'ai') log(`[hand ${game.table.handNo}] ${player.name} ${entry.action} ${entry.amount}${entry.fallback ? ' (fallback)' : ''} ${entry.ms ?? ''}ms${entry.tools ? ` 🔍${entry.tools.join(',')}` : ''} ${entry.say ?? ''}`);
@@ -62,19 +64,38 @@ function viewerOf(req, url) {
   return { host: false, token, seat: game.seatOfToken(token) };
 }
 
-function lanUrls() {
+function lanAddresses() {
   const out = [];
   for (const list of Object.values(os.networkInterfaces())) {
-    for (const a of list ?? []) if (a.family === 'IPv4' && !a.internal) out.push(`http://${a.address}:${PORT}`);
+    for (const a of list ?? []) if (a.family === 'IPv4' && !a.internal) out.push(a.address);
   }
   return out;
 }
+const lanUrls = () => lanAddresses().map((a) => `http://${a}:${PORT}`);
+
+// Host header allowlist: blocks DNS rebinding (a web page whose domain suddenly points at 127.0.0.1 would otherwise be
+// treated as the host). Loopback names always; this machine's LAN addresses (and lan.hostnames) in LAN mode.
+let lanHostsCache = { at: 0, hosts: [] };
+function allowedHost(header) {
+  const h = String(header ?? '').toLowerCase();
+  const withPort = (name) => (PORT === 80 ? [name, `${name}:80`] : [`${name}:${PORT}`]);
+  const names = ['127.0.0.1', 'localhost', '[::1]'];
+  if (config.lan?.enabled) {
+    if (Date.now() - lanHostsCache.at > 10000) lanHostsCache = { at: Date.now(), hosts: lanAddresses() };
+    names.push(...lanHostsCache.hosts, ...(Array.isArray(config.lan.hostnames) ? config.lan.hostnames.map((n) => String(n).toLowerCase()) : []));
+  }
+  return names.some((n) => withPort(n).includes(h));
+}
+
+// What LAN guests (and spectators) may call; everything else under /api/ is the host's.
+const GUEST_API = new Set(['/api/join', '/api/leave', '/api/action', '/api/say']);
 
 function stateFor(viewer) {
   const seat = viewer.host ? 0 : game.seatOfToken(viewer.token);
   const s = game.state(seat);
   const guest = viewer.token ? game.guests.find((g) => g.token === viewer.token) : null;
   s.isHost = viewer.host;
+  if (!viewer.host) s.slack = null;
   s.lan = {
     enabled: Boolean(config.lan?.enabled),
     urls: viewer.host && config.lan?.enabled ? lanUrls() : [],
@@ -86,6 +107,9 @@ function stateFor(viewer) {
   return s;
 }
 
+const sha256 = (s) => crypto.createHash('sha256').update(String(s ?? '')).digest();
+const samePassword = (a, b) => crypto.timingSafeEqual(sha256(a), sha256(b));
+
 // ---------------------------------------------------------------- SSE (one stream per browser, its own view)
 const clients = new Map(); // res -> viewer
 let pushTimer = null;
@@ -95,9 +119,13 @@ function pushState() {
     pushTimer = null;
     const cache = new Map();
     for (const [res, viewer] of clients) {
-      const key = viewer.host ? 'host' : `t:${viewer.token}`;
-      if (!cache.has(key)) cache.set(key, `data: ${JSON.stringify(stateFor(viewer))}\n\n`);
-      res.write(cache.get(key));
+      try {
+        const key = viewer.host ? 'host' : `t:${viewer.token}`;
+        if (!cache.has(key)) cache.set(key, `data: ${JSON.stringify(stateFor(viewer))}\n\n`);
+        res.write(cache.get(key));
+      } catch (e) {
+        log('push failed', String(e?.stack ?? e));
+      }
     }
   }, 30);
 }
@@ -110,40 +138,37 @@ setInterval(() => {
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif' };
 
 function send(res, code, body, type = 'application/json; charset=utf-8') {
-  res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store' });
+  res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
   res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
 }
 
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let size = 0;
-    req.on('data', (c) => {
-      size += c.length;
-      if (size > 1e6) req.destroy();
-      else chunks.push(c);
-    });
-    req.on('end', () => {
-      try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'));
-      } catch (e) {
-        reject(e);
-      }
-    });
-    req.on('error', reject);
-  });
+// A file under public/, or null (no traversal out of it, no directories).
+function publicFile(pathname) {
+  const full = path.resolve(PUBLIC, `.${path.posix.normalize(`/${pathname === '/' ? 'index.html' : pathname}`)}`);
+  const rel = path.relative(PUBLIC, full);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
+  try {
+    return fs.statSync(full).isFile() ? full : null;
+  } catch {
+    return null;
+  }
 }
 
-const HOST_ONLY = ['/api/config', '/api/models', '/api/art/', '/api/auto-next', '/api/next', '/api/new-game', '/api/rebuy', '/api/spectate', '/api/slack/', '/api/lan/kick'];
-
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
-  let pathname = url.pathname;
+  let url;
   try {
-    pathname = decodeURIComponent(url.pathname);
-  } catch {}
-  const viewer = viewerOf(req, url);
-  try {
+    // Origin-form targets only ("/path?query"); prefixing keeps "//x" a path instead of a host.
+    if (!req.url.startsWith('/')) return send(res, 400, { ok: false });
+    url = new URL(`http://127.0.0.1:${PORT}${req.url}`);
+    if (!allowedHost(req.headers.host)) return send(res, 421, { ok: false, error: 'unknown host' });
+    let pathname = url.pathname;
+    try {
+      pathname = decodeURIComponent(url.pathname);
+    } catch {}
+    const viewer = viewerOf(req, url);
+    const api = url.pathname.startsWith('/api/');
+    if (!viewer.host && api && !(req.method === 'POST' && GUEST_API.has(url.pathname))) return send(res, 403, { ok: false, error: '只有房主可以这样做' });
+
     if (req.method === 'GET' && url.pathname === '/events') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
       res.write(`data: ${JSON.stringify(stateFor(viewer))}\n\n`);
@@ -152,31 +177,32 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (req.method === 'GET' && url.pathname === '/state') return send(res, 200, stateFor(viewer));
-    if (!viewer.host && HOST_ONLY.some((p) => url.pathname === p || (p.endsWith('/') && url.pathname.startsWith(p)) || url.pathname.startsWith(`${p}/`))) {
-      return send(res, 403, { ok: false, error: '只有房主可以这样做' });
-    }
-    if (url.pathname.startsWith('/api/') && (await settingsApi(req, res, url, send))) return;
-    if (req.method === 'GET') {
-      const file = pathname === '/' ? 'index.html' : pathname.slice(1);
-      const full = path.join(PUBLIC, path.normalize(file));
-      if (!full.startsWith(PUBLIC) || !fs.existsSync(full) || fs.statSync(full).isDirectory()) return send(res, 404, 'not found', 'text/plain');
-      return send(res, 200, fs.readFileSync(full), TYPES[path.extname(full)] ?? 'application/octet-stream');
-    }
-    if (req.method !== 'POST') return send(res, 405, { ok: false });
 
-    if (url.pathname === '/slack/hook') {
+    if (req.method === 'POST' && url.pathname === '/slack/hook') {
       if (!slack || !isLoopback(req.socket.remoteAddress) || !slack.checkToken(String(req.headers['x-bridge-token'] ?? ''))) return send(res, 401, { ok: false });
-      const payload = await readBody(req);
+      const payload = await readJson(req);
       send(res, 200, { ok: true });
       log('[slack] hook', payload.type, JSON.stringify(payload.text ?? payload.action_id ?? ''));
       slack.handleHook(payload).catch((e) => log('[slack] hook failed', String(e?.stack ?? e)));
       return;
     }
 
-    // Browser endpoints: same-origin only (blocks other pages from playing for you).
-    const origin = req.headers.origin;
-    if (origin && origin !== `http://${req.headers.host}`) return send(res, 403, { ok: false });
-    const body = await readBody(req);
+    // Browser requests that change something: same origin only (blocks other pages from playing for you).
+    // The Host header is already known to be ours, so the page's origin must be exactly it.
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      const origin = req.headers.origin;
+      if (origin && origin !== `http://${req.headers.host}`) return send(res, 403, { ok: false });
+    }
+    if (api && (await settingsApi(req, res, url, send))) return;
+
+    if (req.method === 'GET') {
+      const file = api ? null : publicFile(pathname);
+      if (!file) return send(res, 404, 'not found', 'text/plain');
+      return send(res, 200, fs.readFileSync(file), TYPES[path.extname(file).toLowerCase()] ?? 'application/octet-stream');
+    }
+    if (req.method !== 'POST') return send(res, 405, { ok: false });
+
+    const body = await readJson(req);
     const seat = viewer.host ? 0 : viewer.seat;
     switch (url.pathname) {
       case '/api/action':
@@ -186,7 +212,9 @@ const server = http.createServer(async (req, res) => {
       case '/api/join': {
         if (viewer.host) return send(res, 200, { ok: false, error: '房主已经在桌上了' });
         if (!config.lan?.enabled) return send(res, 200, { ok: false, error: '房主没有开启局域网模式' });
-        if (config.lan?.password && body.password !== config.lan.password) return send(res, 200, { ok: false, error: '房间密码不对' });
+        // Renaming (a token that already joined) does not ask for the room password again.
+        const known = Boolean(viewer.token) && game.guests.some((g) => g.token === viewer.token);
+        if (!known && config.lan?.password && !samePassword(body.password, config.lan.password)) return send(res, 200, { ok: false, error: '房间密码不对' });
         return send(res, 200, game.join(viewer.token, body.name));
       }
       case '/api/leave':
@@ -208,35 +236,53 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, { ok: true });
       case '/api/slack/open': {
         if (!slack) return send(res, 200, { ok: false, error: 'Slack 未启用' });
-        await slack.enqueue(() => slack.openThread(body.channel ?? slackCfg.channel));
-        return send(res, 200, { ok: Boolean(slack.thread), thread: slack.thread });
+        let error = null;
+        await slack.enqueue(() =>
+          slack.openThread(body.channel ?? slackCfg.channel).catch((e) => {
+            error = e;
+          }),
+        );
+        return send(res, 200, error ? { ok: false, error: String(error?.message ?? error) } : { ok: Boolean(slack.thread), thread: slack.thread });
       }
       case '/api/slack/stop':
-        slack?.stop();
+        if (!slack) return send(res, 200, { ok: false, error: 'Slack 未启用' });
+        slack.stop();
         return send(res, 200, { ok: true });
       default:
         return send(res, 404, { ok: false });
     }
   } catch (e) {
-    log('request failed', req.url, String(e?.stack ?? e));
-    if (!res.headersSent) send(res, 500, { ok: false, error: String(e?.message ?? e) });
+    // Path only: guest tokens can ride in the query string.
+    log('request failed', req.method, url?.pathname ?? '(bad url)', String(e?.stack ?? e));
+    if (!res.headersSent && !res.destroyed) send(res, url ? 500 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 });
 
-server.on('error', (e) => {
-  log('server error', String(e?.message ?? e));
-  if (e.code === 'EADDRINUSE') process.exit(1);
-});
+server.on('error', (e) => log('server error', String(e?.message ?? e)));
 
 // LAN mode listens on every interface; otherwise only on this machine. Re-run after settings change.
+// HOLDEM_LISTEN_HOST pins the interface (tests).
+const wantedHost = () => process.env.HOLDEM_LISTEN_HOST || (config.lan?.enabled ? '0.0.0.0' : '127.0.0.1');
 let boundHost = null;
+let binding = false;
 let started = false;
-function listen() {
-  const host = config.lan?.enabled ? '0.0.0.0' : '127.0.0.1';
-  if (host === boundHost) return;
-  const start = () =>
+function listen(host = wantedHost()) {
+  if (binding || host === boundHost) return;
+  binding = true;
+  const wanted = wantedHost();
+  const start = () => {
+    const fail = (e) => {
+      binding = false;
+      log(`cannot listen on ${host}:${PORT}: ${e?.message ?? e}`);
+      if (!started) process.exit(1);
+      // Keep at least the host's own page reachable.
+      if (host !== '127.0.0.1') listen('127.0.0.1');
+    };
+    server.once('error', fail);
     server.listen(PORT, host, () => {
+      server.off('error', fail);
       boundHost = host;
+      binding = false;
       log(`holdem-ai listening on http://${host}:${PORT}${host === '0.0.0.0' ? `  LAN: ${lanUrls().join(' ')}` : ''}  (${config.ai.map((a) => a.model).join(', ')})`);
       if (!started && slack) {
         slack.saveState();
@@ -244,8 +290,12 @@ function listen() {
       }
       started = true;
       pushState();
+      // Settings changed again while we were rebinding.
+      if (wantedHost() !== wanted) listen();
     });
+  };
   if (boundHost) {
+    boundHost = null;
     for (const res of clients.keys()) res.end();
     clients.clear();
     server.close(() => start());

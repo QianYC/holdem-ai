@@ -2,8 +2,6 @@ node_modules/
 data/
 config.json
 public/characters/*/reference.*
-public/portraits/
-public/stickers/
 *.log
 .DS_Store
 Thumbs.db

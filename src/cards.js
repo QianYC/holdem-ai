@@ -5,8 +5,6 @@ export const SUITS = 'shdc';
 export const SUIT_SYMBOL = { s: '♠', h: '♥', d: '♦', c: '♣' };
 const RANK_NAME = { 14: 'A', 13: 'K', 12: 'Q', 11: 'J', 10: '10', 9: '9', 8: '8', 7: '7', 6: '6', 5: '5', 4: '4', 3: '3', 2: '2' };
 
-export const CATEGORY_NAMES = ['高牌', '一对', '两对', '三条', '顺子', '同花', '葫芦', '四条', '同花顺'];
-
 export function newDeck() {
   const deck = [];
   for (const r of RANKS) for (const s of SUITS) deck.push(r + s);

@@ -2,11 +2,11 @@ import { EventEmitter } from 'node:events';
 import crypto from 'node:crypto';
 import { compareScores, evaluate, newDeck, shuffle } from './cards.js';
 
-export const STREETS = ['preflop', 'flop', 'turn', 'river'];
 export const STREET_NAMES = { preflop: '翻牌前', flop: '翻牌', turn: '转牌', river: '河牌', showdown: '摊牌' };
 
-// No-limit hold'em table. `decide(player, legal, view)` returns {action, amount?, say?}; actions are
-// fold | check | call | raise (amount = total bet this street, "raise to") | allin.
+// No-limit hold'em table. `decide(player, legal, view)` returns {action, amount?, say?, forceFold?}; actions are
+// fold | check | call | raise (amount = total bet this street, "raise to") | allin. A fold when checking is free
+// becomes a check, unless forceFold is set (used for players who left the table).
 export class Table extends EventEmitter {
   constructor({ seats, smallBlind, bigBlind, decide, makeDeck = () => shuffle(newDeck()), button }) {
     super();
@@ -183,7 +183,9 @@ export class Table extends EventEmitter {
       try {
         decision = await this.decide(p, legal, this.viewFor(p));
       } catch (e) {
-        decision = { action: legal.canCheck ? 'check' : 'fold', note: `error: ${e?.message ?? e}` };
+        // Recorded as a fallback action; listeners of 'decideError' can log the cause.
+        decision = { action: legal.canCheck ? 'check' : 'fold', fallback: true };
+        this.emit('decideError', { hand: h, player: p, error: e });
       }
       this.apply(p, decision ?? {}, legal);
       from = p.seat + 1;
@@ -202,7 +204,7 @@ export class Table extends EventEmitter {
     }
     if (action === 'raise' && !legal.canRaise) action = legal.canCall ? 'call' : 'check';
     if (action === 'call' && !legal.canCall) action = 'check';
-    if (action === 'fold' && legal.canCheck) action = 'check';
+    if (action === 'fold' && legal.canCheck && !decision.forceFold) action = 'check';
     if (action === 'check' && !legal.canCheck) action = 'fold';
     if (!['fold', 'check', 'call', 'raise'].includes(action)) action = legal.canCheck ? 'check' : 'fold';
     if (action === 'raise') {
@@ -235,6 +237,17 @@ export class Table extends EventEmitter {
     p.acted = true;
     this.record(p, shown, value, decision);
     h.toAct = -1;
+  }
+
+  // A player who left the table folds out of turn while the hand is still being played (all-in players stay in:
+  // they have nothing left to decide). Returns whether they folded.
+  foldOutOfTurn(p) {
+    const h = this.hand;
+    if (!h || h.result || !p.inHand || p.folded || p.allIn) return false;
+    p.folded = true;
+    p.acted = true;
+    this.record(p, 'fold', 0);
+    return true;
   }
 
   // Table talk outside of an action (the human's chat). Recorded in the hand log for everyone to read.
@@ -289,9 +302,11 @@ export class Table extends EventEmitter {
     const potTotal = this.pot();
     const pots = [];
     const reveals = [];
+    const won = {};
     if (contenders.length === 1) {
       const w = contenders[0];
       w.stack += potTotal;
+      won[w.seat] = potTotal;
       pots.push({ amount: potTotal, winners: [w.seat], eligible: [w.seat], hand: null });
     } else {
       for (const p of contenders) {
@@ -319,23 +334,18 @@ export class Table extends EventEmitter {
           if (cmp > 0) best = [p];
           else if (cmp === 0) best.push(p);
         }
+        // Odd chips go to the winners closest to the left of the button.
         const order = best.slice().sort((a, b) => this.seatOrderFromButton(a.seat) - this.seatOrderFromButton(b.seat));
         const share = Math.floor(pot.amount / order.length);
         let odd = pot.amount - share * order.length;
         for (const w of order) {
-          w.stack += share + (odd > 0 ? 1 : 0);
-          odd--;
+          const amount = share + (odd-- > 0 ? 1 : 0);
+          w.stack += amount;
+          won[w.seat] = (won[w.seat] ?? 0) + amount;
         }
         pot.winners = order.map((w) => w.seat);
         pot.hand = order[0].eval.name;
       }
-    }
-    const won = {};
-    for (const pot of pots) {
-      const share = Math.floor(pot.amount / pot.winners.length);
-      pot.winners.forEach((s, i) => {
-        won[s] = (won[s] ?? 0) + share + (i < pot.amount - share * pot.winners.length ? 1 : 0);
-      });
     }
     const net = {};
     for (const p of inHand) net[p.seat] = (won[p.seat] ?? 0) - p.total;

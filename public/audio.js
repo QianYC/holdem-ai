@@ -57,10 +57,12 @@ export function createAudio() {
   let step = 0;
   let enabled = localStorage.getItem('holdem.bgm') !== 'off';
   let volume = Number(localStorage.getItem('holdem.volume') ?? 0.5);
+  let onState = null; // called when the context starts or stops running (the page shows whether music is on)
 
   function init() {
     if (ctx) return;
     ctx = new AudioContext();
+    ctx.onstatechange = () => onState?.();
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -18;
     comp.ratio.value = 3;
@@ -177,7 +179,7 @@ export function createAudio() {
     if (bar % 2 === 1) {
       const line = song.melody[Math.floor(bar / 2) % song.melody.length];
       const n = line[pos];
-      if (n && Math.random() < 0.85) epiano(n + 12 * 0, tt, beatDur * 1.6, 0.05);
+      if (n && Math.random() < 0.85) epiano(n, tt, beatDur * 1.6, 0.05);
     }
     // Drums.
     if (song.drums === 'brush') {
@@ -194,6 +196,8 @@ export function createAudio() {
 
   function tick() {
     const beatDur = 60 / SONGS[mood].bpm / 2;
+    // A throttled timer (background tab) must not schedule the missed steps in the past: they would all play at once.
+    if (nextTime < ctx.currentTime) nextTime = ctx.currentTime + 0.05;
     while (nextTime < ctx.currentTime + 0.15) {
       scheduleStep(nextTime, beatDur);
       nextTime += beatDur;
@@ -230,7 +234,6 @@ export function createAudio() {
       api.start();
       musicBus.gain.setTargetAtTime(enabled ? 0.55 : 0, ctx.currentTime, 0.2);
       if (!enabled) setTimeout(() => !enabled && stopLoop(), 600);
-      return enabled;
     },
     setVolume(v) {
       volume = Math.max(0, Math.min(1, v));
@@ -244,6 +247,9 @@ export function createAudio() {
     },
     get ready() {
       return Boolean(ctx && ctx.state === 'running');
+    },
+    onStateChange(cb) {
+      onState = cb;
     },
     sfx(name) {
       if (!ctx || ctx.state !== 'running') return;
@@ -281,9 +287,6 @@ export function createAudio() {
         case 'win':
           [72, 76, 79, 84, 88].forEach((n, i) => tone(NOTE(n), t + i * 0.08, 0.5, { type: 'triangle', peak: 0.1, ...b }));
           for (let i = 0; i < 10; i++) noise(t + 0.3 + i * 0.04, 0.05, { freq: 4000 + Math.random() * 2000, type: 'bandpass', q: 6, peak: 0.08, ...b });
-          break;
-        case 'lose':
-          [64, 63, 62, 59].forEach((n, i) => tone(NOTE(n), t + i * 0.22, 0.5, { type: 'sawtooth', peak: 0.05, filter: 1400, ...b }));
           break;
         case 'knockout':
           [76, 79, 83, 88, 91, 95].forEach((n, i) => tone(NOTE(n), t + i * 0.06, 0.6, { type: 'sine', peak: 0.09, ...b }));

@@ -10,7 +10,10 @@ let models = [];
 let providerModels = {}; // extra providers (llm.providers): name -> model ids
 let tab = 'game';
 let open = null; // index of the expanded AI card
+let dirty = false; // unsaved changes in the draft
 const jobs = {}; // key -> {id, stage, status}
+// Sticker ids become file names (same rule as the server) and keys of config.stickers.
+const STICKER_ID_RE = /^[^\\/:*?"<>|.\s][^\\/:*?"<>|.]{0,39}$/;
 
 async function api(url, body, opts = {}) {
   const r = await fetch(url, body === undefined ? opts : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), ...opts });
@@ -19,8 +22,12 @@ async function api(url, body, opts = {}) {
 
 function status(msg, bad = false) {
   const el = $('setStatus');
-  el.textContent = msg;
+  el.textContent = msg ?? (bad ? '操作失败' : '');
   el.className = bad ? 'bad' : '';
+}
+function markDirty() {
+  dirty = true;
+  status('有未保存的修改');
 }
 
 function slug(s, i) {
@@ -43,14 +50,15 @@ function set(obj, pathStr, value) {
 }
 
 // ---------------------------------------------------------------- field helpers
-const field = (label, pathStr, { type = 'text', hint = '', attrs = '', list = '' } = {}) => {
+const field = (label, pathStr, { type = 'text', hint = '', attrs = '' } = {}) => {
   const v = get(draft, pathStr);
-  if (type === 'bool') return `<label class="sf chk"><input type="checkbox" data-bind="${pathStr}" data-type="bool" ${v ? 'checked' : ''}> ${label}${hint ? `<small>${hint}</small>` : ''}</label>`;
-  if (type === 'textarea') return `<label class="sf wide">${label}<textarea data-bind="${pathStr}" rows="3" ${attrs}>${esc(v)}</textarea>${hint ? `<small>${hint}</small>` : ''}</label>`;
-  return `<label class="sf">${label}<input data-bind="${pathStr}" data-type="${type}" type="${type === 'number' ? 'number' : type === 'color' ? 'color' : type === 'password' ? 'password' : 'text'}" value="${esc(v)}" ${list ? `list="${list}"` : ''} ${attrs}>${hint ? `<small>${hint}</small>` : ''}</label>`;
+  const bind = esc(pathStr);
+  if (type === 'bool') return `<label class="sf chk"><input type="checkbox" data-bind="${bind}" data-type="bool" ${v ? 'checked' : ''}> ${label}${hint ? `<small>${hint}</small>` : ''}</label>`;
+  if (type === 'textarea') return `<label class="sf wide">${label}<textarea data-bind="${bind}" rows="3" ${attrs}>${esc(v)}</textarea>${hint ? `<small>${hint}</small>` : ''}</label>`;
+  return `<label class="sf">${label}<input data-bind="${bind}" data-type="${type}" type="${type === 'number' ? 'number' : type === 'color' ? 'color' : type === 'password' ? 'password' : 'text'}" value="${esc(v)}" ${attrs}>${hint ? `<small>${hint}</small>` : ''}</label>`;
 };
 const select = (label, pathStr, options, hint = '') =>
-  `<label class="sf">${label}<select data-bind="${pathStr}">${options.map(([v, t]) => `<option value="${esc(v)}" ${String(get(draft, pathStr) ?? '') === v ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>${hint ? `<small>${hint}</small>` : ''}</label>`;
+  `<label class="sf">${label}<select data-bind="${esc(pathStr)}">${options.map(([v, t]) => `<option value="${esc(v)}" ${String(get(draft, pathStr) ?? '') === v ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>${hint ? `<small>${hint}</small>` : ''}</label>`;
 
 // Model picker: every model the endpoint lists (GET {baseUrl}/models), grouped by family, plus a custom id.
 // (A text box with a <datalist> only suggests entries matching what is already typed, so it looked incomplete.)
@@ -68,7 +76,8 @@ function modelSelect(label, pathStr, { kind = 'chat', withProviders = false } = 
   const prov = withProviders ? get(draft, `${base}.provider`) : null;
   const value = prov ? `${prov}::${get(draft, pathStr) ?? ''}` : String(get(draft, pathStr) ?? '');
   const list = models.filter(kind === 'image' ? isImageModel : isChatModel);
-  const all = value && !list.includes(value) ? [value, ...list] : list;
+  // A provider model is listed in its own group below, not among the default endpoint's models.
+  const all = value && !prov && !list.includes(value) ? [value, ...list] : list;
   const groups = new Map();
   for (const m of all) {
     const f = family(m);
@@ -84,7 +93,7 @@ function modelSelect(label, pathStr, { kind = 'chat', withProviders = false } = 
       opts += `<optgroup label="${esc(name)}（独立提供方）">${all.map((m) => `<option value="${esc(`${name}::${m}`)}" ${`${name}::${m}` === value ? 'selected' : ''}>${esc(m)}</option>`).join('')}</optgroup>`;
     }
   const hint = models.length ? '' : '<small>还没读到模型列表：到「模型接口」页点「测试连接」</small>';
-  return `<label class="sf">${label}<select data-model="${pathStr}">${value ? '' : '<option value="" selected>（请选择）</option>'}${opts}<option value="${CUSTOM}">✎ 自定义模型 id…</option></select>${hint}</label>`;
+  return `<label class="sf">${label}<select data-model="${esc(pathStr)}">${value ? '' : '<option value="" selected>（请选择）</option>'}${opts}<option value="${CUSTOM}">✎ 自定义模型 id…</option></select>${hint}</label>`;
 }
 
 // ---------------------------------------------------------------- tabs
@@ -182,7 +191,7 @@ function aiCard(a, i) {
           <button type="button" data-gen="stickers">生成表情包</button>
           <label class="chk"><input type="checkbox" data-force> 覆盖已有</label>
         </div>
-        ${job ? `<div class="job ${job.status}">${job.status === 'running' ? '<span class="thinking-dots">生成中</span>' : job.status === 'done' ? '✓ 完成' : '✗ 失败'} · ${esc(job.stage)}${job.last ? ` · ${esc(job.last)}` : ''}</div>` : ''}
+        ${job ? jobHtml(job) : ''}
         <small>生成前请先保存（生成脚本读取已保存的配置）。每张图约 20–40 秒。</small>
       </details>
     </div>`
@@ -191,10 +200,17 @@ function aiCard(a, i) {
   </div>`;
 }
 
+const jobHtml = (job) =>
+  `<div class="job ${esc(job.status)}">${job.status === 'running' ? '<span class="thinking-dots">生成中</span>' : job.status === 'done' ? '✓ 完成' : '✗ 失败'} · ${esc(job.stage)}${job.last ? ` · ${esc(job.last)}` : ''}</div>`;
+
 function aiTab() {
   return `<div class="aitop"><b>${draft.ai.length}</b> 个 AI（最多 ${maxAi}）<button type="button" id="addAi" ${draft.ai.length >= maxAi ? 'disabled' : ''}>＋ 添加 AI</button></div>
     ${draft.ai.map(aiCard).join('')}`;
 }
+
+// Sticker ids may contain characters that would break a dotted data-bind path, so they bind by id + key.
+const stickerField = (id, key, attrs = '') =>
+  `<label class="sf"><input data-stk="${esc(id)}" data-stkkey="${key}" data-type="text" type="text" value="${esc(draft.stickers?.[id]?.[key])}" ${attrs}></label>`;
 
 function stickerTab() {
   const entries = Object.entries(draft.stickers ?? {});
@@ -204,9 +220,9 @@ function stickerTab() {
       .map(
         ([id]) => `<tr>
         <td><code>${esc(id)}</code></td>
-        <td>${field('', `stickers.${id}.label`)}</td>
-        <td>${field('', `stickers.${id}.emoji`, { attrs: 'class="emo" maxlength="4"' })}</td>
-        <td>${field('', `stickers.${id}.prompt`)}</td>
+        <td>${stickerField(id, 'label')}</td>
+        <td>${stickerField(id, 'emoji', 'class="emo" maxlength="4"')}</td>
+        <td>${stickerField(id, 'prompt')}</td>
         <td><button type="button" class="danger" data-delsticker="${esc(id)}">✕</button></td></tr>`,
       )
       .join('')}
@@ -226,11 +242,18 @@ function llmTab() {
 }
 
 // ---------------------------------------------------------------- render
+const TABS = { game: gameTab, ai: aiTab, stickers: stickerTab, llm: llmTab };
+// True while the user is typing in the panel: background refreshes then must not rebuild it (focus would be lost).
+function typing() {
+  const a = document.activeElement;
+  return Boolean(a && $('setBody').contains(a) && (a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && a.type !== 'checkbox')));
+}
+
 function render() {
   const body = $('setBody');
+  if (!TABS[tab]) tab = 'game';
   document.querySelectorAll('#setTabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
-  body.innerHTML = { game: gameTab, ai: aiTab, stickers: stickerTab, llm: llmTab }[tab]();
-  $('modelList').innerHTML = models.map((m) => `<option value="${esc(m)}">`).join('');
+  body.innerHTML = TABS[tab]();
   body.querySelectorAll('[data-bind]').forEach((el) => {
     el.addEventListener(el.type === 'checkbox' || el.tagName === 'SELECT' ? 'change' : 'input', () => {
       const t = el.dataset.type;
@@ -240,7 +263,14 @@ function render() {
         const i = Number(el.dataset.bind.split('.')[1]);
         if (draft.ai[i]._new) draft.ai[i].key = slug(v, i);
       }
-      status('有未保存的修改');
+      markDirty();
+    });
+  });
+  body.querySelectorAll('[data-stk]').forEach((el) => {
+    el.addEventListener('input', () => {
+      const st = draft.stickers[el.dataset.stk];
+      if (st) st[el.dataset.stkkey] = el.value;
+      markDirty();
     });
   });
   body.querySelectorAll('select[data-model]').forEach((el) => {
@@ -259,22 +289,22 @@ function render() {
         v = id;
       }
       set(draft, el.dataset.model, v);
-      status('有未保存的修改');
+      markDirty();
       render();
     });
   });
   $('sidelineChk')?.addEventListener('change', (e) => {
     draft.sideline = { ...(draft.sideline ?? {}), enabled: e.target.checked };
-    status('有未保存的修改');
+    markDirty();
   });
   $('blindLevelsText')?.addEventListener('input', (e) => {
     const levels = e.target.value
       .split(/[,，\s]+/)
       .map((x) => x.split('/').map(Number))
       .filter(([s, b]) => s > 0 && b > 0);
-    if (levels.length) draft.blindLevels = levels;
-    else delete draft.blindLevels;
-    status('有未保存的修改');
+    // null (not a missing key) tells the server to drop custom levels and generate them again.
+    draft.blindLevels = levels.length ? levels : null;
+    markDirty();
   });
   bindActions(body);
 }
@@ -291,8 +321,10 @@ function bindActions(body) {
       b.addEventListener('click', () => {
         const j = i + Number(b.dataset.move);
         [draft.ai[i], draft.ai[j]] = [draft.ai[j], draft.ai[i]];
+        // The expanded card follows its AI.
         if (open === i) open = j;
-        status('有未保存的修改');
+        else if (open === j) open = i;
+        markDirty();
         render();
       }),
     );
@@ -300,10 +332,12 @@ function bindActions(body) {
       if (!confirm(`移除 ${a.name}？（美术文件不会删除）`)) return;
       draft.ai.splice(i, 1);
       open = null;
-      status('有未保存的修改');
+      markDirty();
       render();
     });
-    card.querySelectorAll('[data-up]').forEach((b) => b.addEventListener('click', () => pickAndUpload(a.key, b.dataset.up)));
+    // Art lives under the AI's key, which is only fixed once a new AI has been saved.
+    const saved = () => (a._new ? (status('先保存这个新角色，再上传或生成图片', true), false) : true);
+    card.querySelectorAll('[data-up]').forEach((b) => b.addEventListener('click', () => saved() && pickAndUpload(a.key, b.dataset.up)));
     card.querySelectorAll('[data-del]').forEach((b) =>
       b.addEventListener('click', async () => {
         if (!confirm('删除这张图？')) return;
@@ -317,13 +351,16 @@ function bindActions(body) {
       }),
     );
     card.querySelector('[data-upstk]')?.addEventListener('click', () => {
+      if (!saved()) return;
       const ids = Object.keys(draft.stickers ?? {});
-      const id = prompt(`表情 id（文件名，可用中文）。已定义：${ids.join('、') || '无'}`, ids.find((x) => !(art[a.key]?.stickers ?? []).some((s) => s.id === x)) ?? '');
-      if (id) pickAndUpload(a.key, 'sticker', id.trim());
+      const id = prompt(`表情 id（文件名，可用中文）。已定义：${ids.join('、') || '无'}`, ids.find((x) => !(art[a.key]?.stickers ?? []).some((s) => s.id === x)) ?? '')?.trim();
+      if (!id) return;
+      if (!STICKER_ID_RE.test(id)) return status('表情 id 不能包含 \\ / : * ? " < > | . 或空白，最长 40 个字', true);
+      pickAndUpload(a.key, 'sticker', id);
     });
     card.querySelectorAll('[data-gen]').forEach((b) =>
       b.addEventListener('click', async () => {
-        if (a._new) return status('先保存，再生成', true);
+        if (!saved()) return;
         const force = card.querySelector('[data-force]')?.checked;
         const r = await api('/api/art/generate', { key: a.key, stage: b.dataset.gen, force });
         if (!r.ok) return status(r.error, true);
@@ -337,22 +374,24 @@ function bindActions(body) {
     const i = draft.ai.length;
     draft.ai.push({ _new: true, key: `ai${i + 1}`, name: `AI ${i + 1}`, model: models[0] ?? '', avatar: '🤖', color: '#58a6ff', title: '', persona: '成年人，……', art: {} });
     open = i;
-    status('有未保存的修改');
+    markDirty();
     render();
   });
   body.querySelectorAll('[data-delsticker]').forEach((b) =>
     b.addEventListener('click', () => {
       delete draft.stickers[b.dataset.delsticker];
-      status('有未保存的修改');
+      markDirty();
       render();
     }),
   );
   $('addSticker')?.addEventListener('click', () => {
     const id = $('newStickerId').value.trim();
     if (!id) return;
+    if (!STICKER_ID_RE.test(id) || id === '__proto__') return status('表情 id 不能包含 \\ / : * ? " < > | . 或空白，最长 40 个字', true);
+    if (Object.hasOwn(draft.stickers ?? {}, id)) return status(`已经有表情 ${id} 了`, true);
     draft.stickers ??= {};
     draft.stickers[id] = { label: id, emoji: '', prompt: '' };
-    status('有未保存的修改');
+    markDirty();
     render();
   });
   $('testLlm')?.addEventListener('click', async () => {
@@ -363,6 +402,7 @@ function bindActions(body) {
   });
 }
 
+// Generation jobs: refresh only the status lines while the user is typing; rebuild the tab otherwise.
 let polling = null;
 function pollJobs() {
   if (polling) return;
@@ -381,7 +421,12 @@ function pollJobs() {
       polling = null;
       await refreshArt();
     }
-    if (tab === 'ai') render();
+    if (tab !== 'ai' || $('settingsModal').classList.contains('hidden')) return;
+    if (!typing()) return render();
+    for (const [key, job] of Object.entries(jobs)) {
+      const i = draft.ai.findIndex((a) => a.key === key);
+      document.querySelector(`#setBody .aicard[data-i="${i}"] .job`)?.replaceWith(Object.assign(document.createElement('template'), { innerHTML: jobHtml(job) }).content);
+    }
   }, 2000);
 }
 
@@ -406,7 +451,9 @@ function pickAndUpload(key, slot, id) {
     if (!file) return;
     status('上传中…');
     const q = new URLSearchParams({ key, slot, ...(id ? { id } : {}) });
-    const r = await fetch(`/api/art/upload?${q}`, { method: 'POST', headers: { 'content-type': file.type }, body: file }).then((x) => x.json());
+    const r = await fetch(`/api/art/upload?${q}`, { method: 'POST', headers: { 'content-type': file.type }, body: file })
+      .then((x) => x.json())
+      .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
     if (!r.ok) return status(r.error, true);
     art = r.art;
     status('已上传');
@@ -431,6 +478,7 @@ async function save(andNewGame) {
   const r = await api('/api/config', { config: payload });
   if (!r.ok) return status(r.error, true);
   for (const a of draft.ai) delete a._new;
+  dirty = false;
   await refreshArt();
   if (andNewGame) {
     await api('/api/new-game', {});
@@ -438,16 +486,20 @@ async function save(andNewGame) {
     close();
     return;
   }
-  status(r.needsNewGame ? '已保存。名单 / 模型 / 盲注的改动要在新的一局生效。' : '已保存，从下一手起生效。');
+  status(r.needsNewGame ? '已保存。起始筹码、盲注、你的名字和 AI 数量的改动要在新的一局生效。' : '已保存，从下一手起生效。');
   render();
 }
 
 function close() {
   $('settingsModal').classList.add('hidden');
 }
+function closeAsked() {
+  if (dirty && !confirm('有未保存的修改，确定关闭吗？（修改会丢失）')) return;
+  close();
+}
 
 export async function openSettings(startTab, openIndex) {
-  if (startTab) tab = startTab;
+  if (startTab) tab = TABS[startTab] ? startTab : 'game';
   if (openIndex != null && openIndex !== '') open = Number(openIndex);
   const r = await api('/api/config');
   if (!r.ok) return alert(r.error ?? '读取配置失败');
@@ -457,10 +509,14 @@ export async function openSettings(startTab, openIndex) {
   art = r.art;
   hasApiKey = r.hasApiKey;
   maxAi = r.maxAi;
+  dirty = false;
   $('settingsModal').classList.remove('hidden');
   status(r.file === 'config.example.json' ? '当前使用默认配置，保存后会写入 config.json' : '');
   render();
-  if (!models.length) loadModels().then(() => render());
+  if (!models.length)
+    loadModels().then(() => {
+      if (!typing()) render();
+    });
 }
 
 export function initSettings() {
@@ -470,12 +526,15 @@ export function initSettings() {
     tab = b.dataset.tab;
     render();
   });
-  $('setCancel').onclick = close;
+  $('setCancel').onclick = closeAsked;
   $('setSave').onclick = () => save(false);
   $('setSaveNew').onclick = () => {
     if (confirm('保存并重新开始？当前牌局会结束，所有人筹码重置。')) save(true);
   };
+  // Close on a click that starts and ends on the backdrop (not a text selection dragged out of the panel).
+  let downOnBackdrop = false;
+  $('settingsModal').addEventListener('mousedown', (e) => (downOnBackdrop = e.target.id === 'settingsModal'));
   $('settingsModal').addEventListener('click', (e) => {
-    if (e.target.id === 'settingsModal') close();
+    if (downOnBackdrop && e.target.id === 'settingsModal') closeAsked();
   });
 }

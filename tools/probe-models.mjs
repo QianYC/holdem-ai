@@ -1,9 +1,13 @@
-// Checks which models answer on the configured endpoint and how fast.
-// usage: node tools/probe-models.mjs [model ...]   (default: the models in the config)
+// Checks which models answer on the configured endpoint (llm.baseUrl, OpenAI Responses) and how fast.
+// usage: node tools/probe-models.mjs [model ...]   (default: the models of the AI seats in the config)
+// Seats that use another provider (llm.providers) are skipped: their auth helpers are internal to src/ai.js.
 import { llm } from './lib.mjs';
 
 const { cfg, url, auth } = llm();
-const models = process.argv.slice(2).length ? process.argv.slice(2) : cfg.ai.map((a) => a.model);
+const seats = cfg.ai ?? [];
+const skipped = seats.filter((a) => a.provider);
+const models = process.argv.slice(2).length ? process.argv.slice(2) : [...new Set(seats.filter((a) => !a.provider).map((a) => a.model))];
+for (const a of skipped) console.log(`${a.model.padEnd(22)} skipped (provider ${a.provider})`);
 const prompt =
   'You are playing No-Limit Texas Hold\'em. Your hole cards: Ah Kd. Board: Qs Jh 2c. Pot 300, to call 100, your stack 1900. Reply ONLY with JSON: {"action":"fold|check|call|raise","amount":<total bet if raise>,"say":"<short table talk>"}';
 await Promise.all(
