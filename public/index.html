@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>德州扑克 · 你 vs AI</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">♠♥ 德州扑克 <span id="brandSub">你 vs AI</span></div>
+    <div class="meta" id="meta"></div>
+    <div class="tools">
+      <button id="bgmBtn" class="ghost" title="背景音乐开关（首次需要点一下页面）">🎵 BGM</button>
+      <input id="volume" type="range" min="0" max="1" step="0.05" title="音量">
+      <button id="slackBtn" class="ghost">同步到 Slack</button>
+      <button id="settingsBtn" class="ghost" title="游戏设置">⚙ 设置</button>
+      <button id="newGameBtn" class="ghost">新的一局</button>
+    </div>
+  </header>
+  <main>
+    <section class="arena">
+      <div class="table" id="table">
+        <div class="felt">
+          <div class="center">
+            <div class="pot" id="pot"></div>
+            <div class="board" id="board"></div>
+            <div class="banner" id="banner"></div>
+          </div>
+        </div>
+        <div id="seats"></div>
+      </div>
+      <div class="controls" id="controls"></div>
+      <div class="chatbar hidden" id="chatbar">
+        <div class="quick" id="quick"></div>
+        <form id="chatForm" autocomplete="off">
+          <input id="chatInput" maxlength="60" placeholder="在牌桌上说点什么……（回车发送）">
+          <button type="submit">💬 发言</button>
+        </form>
+      </div>
+    </section>
+    <aside>
+      <div class="panel">
+        <h3>行动记录</h3>
+        <div class="log" id="log"></div>
+      </div>
+      <div class="panel">
+        <h3>筹码榜</h3>
+        <div id="board-list"></div>
+      </div>
+      <div class="panel">
+        <h3>最近几手</h3>
+        <div class="recent" id="recent"></div>
+      </div>
+    </aside>
+  </main>
+  <div id="over" class="over hidden"></div>
+  <div id="settingsModal" class="modal hidden">
+    <div class="mpanel">
+      <div class="mhead">
+        <b>⚙ 游戏设置</b>
+        <div id="setTabs" class="tabs">
+          <button type="button" data-tab="game">牌局</button>
+          <button type="button" data-tab="ai">AI 角色</button>
+          <button type="button" data-tab="stickers">表情包</button>
+          <button type="button" data-tab="llm">模型接口</button>
+        </div>
+      </div>
+      <div id="setBody" class="mbody"></div>
+      <div class="mfoot">
+        <span id="setStatus"></span>
+        <button type="button" id="setCancel" class="ghost">关闭</button>
+        <button type="button" id="setSave" class="primary">保存</button>
+        <button type="button" id="setSaveNew" class="gold">保存并开新局</button>
+      </div>
+    </div>
+    <datalist id="modelList"></datalist>
+  </div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

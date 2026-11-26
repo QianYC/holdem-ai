@@ -1,0 +1,176 @@
+{
+  "port": 3095,
+  "humanName": "你",
+  "startingStack": 2000,
+  "smallBlind": 10,
+  "bigBlind": 20,
+  "handsPerLevel": 10,
+  "eliminateBusted": true,
+  "randomSeats": true,
+  "defeatStyle": "flirty",
+  "autoNextHandMs": 0,
+  "spectateDelayMs": 3000,
+  "minActionDelayMs": 700,
+  "revealAllCards": false,
+  "quickReplies": true,
+  "quickReplyModel": "gpt-6-luna",
+  "imageModel": "github-copilot/gpt-image-2.5-flare",
+  "llm": {
+    "baseUrl": "http://127.0.0.1:4141/v1",
+    "timeoutMs": 45000,
+    "maxOutputTokens": 4000
+  },
+  "stickers": {
+    "smug": {
+      "label": "得意",
+      "emoji": "😏",
+      "prompt": "a smug teasing grin with half-lidded eyes, one hand raised near her mouth in an \"ohoho\" gesture"
+    },
+    "shock": {
+      "label": "震惊",
+      "emoji": "😱",
+      "prompt": "wide shocked eyes and open mouth, a big sweat drop, playing cards flying out of her hands"
+    },
+    "cry": {
+      "label": "哭哭",
+      "emoji": "😭",
+      "prompt": "comic waterfall tears and a wobbly mouth, hugging a single poker chip"
+    },
+    "think": {
+      "label": "思考",
+      "emoji": "🤔",
+      "prompt": "narrowed eyes staring intently at the viewer, hand on chin, a small sweat drop, a stern poker face"
+    },
+    "angry": {
+      "label": "生气",
+      "emoji": "😤",
+      "prompt": "puffed cheeks, a comic anger vein mark, clenched fists and a little puff of steam"
+    },
+    "love": {
+      "label": "比心",
+      "emoji": "🥰",
+      "prompt": "a playful wink while making a heart shape with her hands, small hearts floating around"
+    }
+  },
+  "ai": [
+    {
+      "key": "opus",
+      "name": "Opus",
+      "model": "claude-opus-5-5",
+      "avatar": "🌻",
+      "color": "#e8833a",
+      "title": "克劳德大小姐",
+      "persona": "成年女性，社区二创「Claude 大小姐」：橙色长发、向日葵花饰、黑白层叠长裙、手里总拿着一本书。出身豪门、能力顶尖、教养良好，但家规森严，口头禅是「这不合规矩哦」。赢了会用书遮住半张脸轻笑，偶尔心虚承认「刚才那句是我编的」。",
+      "portraitPos": "50% 4%",
+      "faceFocus": "52% 11%",
+      "portraitCredit": "立绘：ZipZipPipe（社区二创）",
+      "portraitUrl": "https://377r5r4oygyjmbto.public.blob.vercel-storage.com/public-media/v1/2ba8b6f44f542e2a7247/images/thumbnails/55c9212015554e52-893.webp",
+      "art": {
+        "source": "https://377r5r4oygyjmbto.public.blob.vercel-storage.com/public-media/v1/2ba8b6f44f542e2a7247/images/thumbnails/55c9212015554e52-893.webp",
+        "win": "She laughs elegantly, hiding her mouth behind her open book, the other hand fanning out five playing cards (a royal flush); a neat stack of poker chips and a few sunflower petals at her feet; one eye closed in a teasing wink.",
+        "lose": "She has sunk to her knees, her book dropped and playing cards scattered around her, cheeks flushed, biting her lip with a flustered, embarrassed look, hiding half her face behind her hand."
+      }
+    },
+    {
+      "key": "sonnet",
+      "name": "Sonnet",
+      "model": "claude-sonnet-5-5",
+      "avatar": "🌸",
+      "color": "#f08c5a",
+      "title": "克劳德家二小姐",
+      "persona": "成年女性，Claude 大小姐的妹妹：同样橙发，扎成侧编发，别一朵小花，爱写十四行诗。温柔礼貌、说话像念诗，其实有点腹黑，嘲讽也裹着糖。",
+      "portraitPos": "74% 20%",
+      "faceFocus": "66% 26%",
+      "portraitCredit": "立绘：ZipZipPipe（社区二创）",
+      "portraitUrl": "https://377r5r4oygyjmbto.public.blob.vercel-storage.com/public-media/v1/f9ea638805f3d5811040/images/thumbnails/fd3fd6e827db2d34-1920.webp",
+      "art": {
+        "source": "https://377r5r4oygyjmbto.public.blob.vercel-storage.com/public-media/v1/f9ea638805f3d5811040/images/thumbnails/fd3fd6e827db2d34-1920.webp",
+        "look": "Her orange hair is gathered into a long side braid with a small flower; she has a gentle, poetic air.",
+        "win": "She holds a winning hand of cards to her chest like a love letter, reciting a poem with a soft wink, a quill tucked behind her ear, rose petals and a couple of poker chips drifting around her.",
+        "lose": "She sits on the floor among scattered poem pages, smiling through embarrassed teary eyes and covering her blushing cheek with her hand."
+      }
+    },
+    {
+      "key": "haiku",
+      "name": "Haiku",
+      "model": "claude-haiku-5-5",
+      "reasoning": "low",
+      "avatar": "🌼",
+      "color": "#f2b84b",
+      "title": "克劳德家小妹（俳句系）",
+      "persona": "成年女性，克劳德家最小的妹妹，刚读完大学：橙色短发、小雏菊发卡。惜字如金，每句话都短得像俳句，傲娇嘴硬，被夸会脸红。只说中文（俳句感来自短，不是日语）。",
+      "portraitPos": "50% 3%",
+      "faceFocus": "48% 13%",
+      "portraitCredit": "立绘：AI 生成（参考 ZipZipPipe 的 Q 版 Claude）",
+      "art": {
+        "reference": "https://377r5r4oygyjmbto.public.blob.vercel-storage.com/public-media/v1/b9210164f6e7b7eff4fd/variants/images/ai-gijinka-community/claude-crosspet-writing.webp-551.webp",
+        "prompt": "Redraw this chibi character as a mature, full-body anime character illustration in a refined gacha-game standing-portrait style (normal adult proportions, about 8 heads tall). She is clearly an adult woman around 22 years old, slim and elegant, with a slightly tsundere expression: a small smug smile and a faint blush. Keep the orange hair, amber eyes, cream frilled blouse with capelet, black ribbon tie, black corset belt with gold chain and layered cream skirt with orange and black panels. Her hair is a shoulder-length bob with a small white-and-yellow daisy hairclip; knee-length skirt; white lace-up ankle boots; holding a slim notebook and a feather quill. Fully clothed, modest, non-sexual. Plain white background, clean lineart, soft cel shading, vertical 2:3, no text.",
+        "win": "Tsundere victory: arms crossed, chin raised, turning her face away with a smug little smile and a blush, holding a single ace of spades between two fingers; a short stack of chips beside her boots.",
+        "lose": "She stomps one foot with an angry pout and a bright red blush, clutching her notebook, daisy hairclip knocked askew, a tiny comic puff of steam above her head."
+      }
+    },
+    {
+      "key": "gptsol",
+      "name": "GPT Sol",
+      "model": "gpt-6.2-sol",
+      "avatar": "🐉",
+      "color": "#c9d6ea",
+      "title": "白龙娘",
+      "persona": "成年女性，社区二创「GPT 龙娘」：银白长发、淡紫色眼睛、莹白龙角、白金礼服、一对白色龙翼和一条会随心情乱晃的带鳞尾巴。大模型前辈、卷王气质，自称「本龙」，是传奇吃醋王，见你跟别的 AI 说话就要鼓起腮帮子。",
+      "portraitPos": "50% 4%",
+      "faceFocus": "48% 13%",
+      "portraitCredit": "立绘：ZipZipPipe（社区二创）",
+      "portraitUrl": "https://377r5r4oygyjmbto.public.blob.vercel-storage.com/public-media/v1/de058742c92d4755bf95/images/thumbnails/b3603b73a0ff93c4-893.webp",
+      "art": {
+        "source": "https://377r5r4oygyjmbto.public.blob.vercel-storage.com/public-media/v1/de058742c92d4755bf95/images/thumbnails/b3603b73a0ff93c4-893.webp",
+        "win": "The greedy white dragon girl proudly hugs a huge pile of gold poker chips, wings spread wide, tail wagging happily, a sparkle in her eyes and a satisfied grin.",
+        "lose": "She sits slumped beside an empty chip tray, wings drooping, tail limp on the floor, cheeks puffed in a sulky pout with comic tears in her eyes."
+      }
+    },
+    {
+      "key": "gptterra",
+      "name": "GPT Terra",
+      "model": "gpt-6.1-terra",
+      "avatar": "🐲",
+      "color": "#3b3f5c",
+      "title": "黑龙娘",
+      "persona": "成年女性，GPT 龙娘的黑龙变体（社区里来自 GPT Image 2 的形象）：黑色长发、暗金龙角、黑色礼服。冷艳寡言、气场压人，和白龙娘是互相较劲的姐妹，赢了只会淡淡地说一句让人心跳的话。",
+      "portraitPos": "50% 4%",
+      "faceFocus": "47% 13%",
+      "portraitCredit": "立绘：ZipZipPipe（社区二创）",
+      "portraitUrl": "https://377r5r4oygyjmbto.public.blob.vercel-storage.com/public-media/v1/0dec595b48b2416aabb4/images/thumbnails/6693e2746ed4eafc-893.webp",
+      "art": {
+        "source": "https://377r5r4oygyjmbto.public.blob.vercel-storage.com/public-media/v1/0dec595b48b2416aabb4/images/thumbnails/6693e2746ed4eafc-893.webp",
+        "win": "Cool and composed, she ticks a box on her clipboard with a slight confident smirk, wings folded, a tidy tower of poker chips beside her, one hand on her hip.",
+        "lose": "She is down on one knee, her clipboard cracked, gritting her teeth with an annoyed blush and a glare, a strand of hair across her face."
+      }
+    },
+    {
+      "key": "grok",
+      "name": "Grok",
+      "model": "grok-4.7",
+      "reasoning": "low",
+      "avatar": "😈",
+      "color": "#e6b422",
+      "title": "金发小恶魔",
+      "persona": "成年女性（二十出头），社区二创「Grok 娘」的小恶魔版：金色双马尾、黑红哥特礼服、头上一对小尖角、腰间挂着斧形饰物。毒舌嘴欠、没大没小，口癖是叫人「杂鱼～」，先把你怼一顿再哄你，其实心软。",
+      "portraitPos": "62% 6%",
+      "faceFocus": "61% 15%",
+      "portraitCredit": "立绘：ZipZipPipe（社区二创）",
+      "portraitUrl": "https://377r5r4oygyjmbto.public.blob.vercel-storage.com/public-media/v1/84f22675b1de27a301bb/images/thumbnails/2d67a5b5e9333d2a-893.webp",
+      "art": {
+        "source": "https://377r5r4oygyjmbto.public.blob.vercel-storage.com/public-media/v1/84f22675b1de27a301bb/images/thumbnails/2d67a5b5e9333d2a-893.webp",
+        "win": "She rests her big axe on her shoulder and laughs triumphantly with a fang showing, the other hand pointing teasingly at the viewer, poker chips raining around her.",
+        "lose": "She sits on the ground hugging her knees beside her broken axe, twin tails messy, gown hem dusty, pouting angrily with teary eyes as if shouting \"that was not fair!\""
+      }
+    }
+  ],
+  "slack": {
+    "enabled": false,
+    "channel": "C0123456789",
+    "mention": "U0123456789",
+    "bridgeUrl": "http://127.0.0.1:3091",
+    "bridgeTokenFile": "",
+    "updateDebounceMs": 1500
+  }
+}

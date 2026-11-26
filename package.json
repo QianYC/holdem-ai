@@ -1,0 +1,24 @@
+{
+  "name": "holdem-ai",
+  "version": "1.0.0",
+  "description": "Local No-Limit Texas Hold'em: you vs 7 AI players, each driven by a different LLM, with personas, stickers, table talk and optional Slack play.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/QianYC/holdem-ai.git"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/",
+    "art": "node tools/art.mjs all",
+    "art:portraits": "node tools/art.mjs portraits",
+    "art:poses": "node tools/art.mjs poses",
+    "art:stickers": "node tools/art.mjs stickers",
+    "probe": "node tools/probe-models.mjs"
+  }
+}
