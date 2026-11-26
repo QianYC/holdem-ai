@@ -553,3 +553,4 @@ aside .panel:first-child { flex: 1 1 auto; min-height: 160px; display: flex; fle
   83% { opacity: 1; transform: translateY(-50%) scale(1); }
   100% { opacity: 0; transform: translateY(-50%) scale(.96); }
 }
+.felt { inset: 13% var(--fx, 8%) 14%; }

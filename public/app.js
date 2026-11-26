@@ -82,9 +82,11 @@ function toast(msg) {
   setTimeout(() => S && render(S), 2500);
 }
 
+// Fraction of the table box width the oval actually uses (the oval keeps a ~1.6:1 shape on wide screens).
+let squeeze = 1;
 function seatXY(i, n, rx = 45, ry = 39) {
   const a = Math.PI / 2 + (i * 2 * Math.PI) / n;
-  return [50 + rx * Math.cos(a), 50 + ry * Math.sin(a)];
+  return [50 + rx * squeeze * Math.cos(a), 50 + ry * Math.sin(a)];
 }
 
 function render(s) {
@@ -560,10 +562,19 @@ updateBgmButton();
 initSettings();
 
 // Scale seats, cards and chips with the table so everything fits the window at any zoom level.
+const TABLE_RATIO = 1.6; // oval width : table height
 new ResizeObserver(([entry]) => {
   const { width, height } = entry.contentRect;
-  const s = Math.max(0.5, Math.min(1, width / 1150, height / 640));
-  $('table').style.setProperty('--s', s.toFixed(3));
+  const used = Math.min(width, height * TABLE_RATIO);
+  const s = Math.max(0.5, Math.min(1, used / 1000, height / 640));
+  const t = $('table');
+  t.style.setProperty('--s', s.toFixed(3));
+  t.style.setProperty('--fx', `${Math.round((width - used) / 2 + used * 0.08)}px`);
+  const next = used / width;
+  if (Math.abs(next - squeeze) > 0.005) {
+    squeeze = next;
+    if (S) render(S);
+  }
 }).observe($('table'));
 $('settingsBtn').onclick = () => openSettings();
 {
