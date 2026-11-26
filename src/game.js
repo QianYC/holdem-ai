@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import { cardLabel, shuffle } from './cards.js';
-import { aiDecide, askModel, describeAction, positionLabels, quickReplies } from './ai.js';
+import { aiDecide, askModel, describeAction, positionLabels, quickReplies, shownName } from './ai.js';
 import { Table } from './engine.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -58,6 +58,7 @@ export function scanArt(publicDir, a, stickerMeta = {}) {
     stickers,
   };
 }
+export const MAX_SEATS = 10;
 const ART_KEYS = ['key', 'title', 'persona', 'avatar', 'color', 'portrait', 'winPortrait', 'losePortrait', 'portraitPos', 'faceFocus', 'portraitCredit', 'portraitUrl'];
 
 // One table session: the human (seat 0) plus AI seats. Clients (web, Slack) observe `change` /
@@ -70,10 +71,85 @@ export class Game extends EventEmitter {
     this.configPath = configPath;
     this.log = log;
     this.dataDir = dataDir;
+    this.guests = this.loadGuests();
     this.newGame();
     this.restore();
     this.ready = true;
     if (this.spectating || this.config.autoNextHandMs) setTimeout(() => this.scheduleAutoNext(), 1000);
+  }
+
+  // ---------------------------------------------------------------- LAN players
+  // Seat 0 is always the host (the person at the server's keyboard). Other people on the LAN join with a
+  // token kept in their browser; they get a seat when a new game is set up.
+  guestsPath() {
+    return this.dataDir ? path.join(this.dataDir, 'lan.json') : null;
+  }
+
+  loadGuests() {
+    try {
+      return JSON.parse(fs.readFileSync(this.guestsPath(), 'utf8')).guests ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  saveGuests() {
+    const file = this.guestsPath();
+    if (!file) return;
+    try {
+      fs.mkdirSync(this.dataDir, { recursive: true });
+      fs.writeFileSync(file, JSON.stringify({ guests: this.guests }, null, 2));
+    } catch (e) {
+      this.log(`[game] cannot save LAN players: ${e}`);
+    }
+  }
+
+  seatOfToken(token) {
+    const g = token && this.guests.find((x) => x.token === token);
+    return g ? this.table.players.findIndex((p) => p.id === g.id) : -1;
+  }
+
+  join(token, name) {
+    if (!/^[a-z0-9]{16,64}$/i.test(String(token ?? ''))) return { ok: false, error: '无效的玩家标识' };
+    const nick = String(name ?? '').trim().slice(0, 12);
+    if (!nick) return { ok: false, error: '起个名字吧' };
+    const taken = [this.config.humanName ?? '你', ...this.config.ai.map((a) => a.name), ...this.guests.filter((g) => g.token !== token).map((g) => g.name)];
+    if (taken.includes(nick)) return { ok: false, error: '这个名字已经有人用了' };
+    let g = this.guests.find((x) => x.token === token);
+    if (g) g.name = nick;
+    else {
+      if (1 + this.guests.length + this.config.ai.length >= MAX_SEATS) return { ok: false, error: `桌子坐满了（最多 ${MAX_SEATS} 人）` };
+      g = { id: `g-${token.slice(0, 8)}`, token, name: nick, joinedAt: Date.now() };
+      this.guests.push(g);
+    }
+    this.saveGuests();
+    const seat = this.seatOfToken(token);
+    if (seat >= 0) this.table.players[seat].name = nick;
+    // Nobody has played yet: rebuild the table right away so the newcomer sits down.
+    else if (this.status === 'ready' && this.table.handNo === 0 && !this.running) this.newGame();
+    this.log(`[lan] ${nick} joined`);
+    this.emit('lanChange');
+    this.changed();
+    const now = this.seatOfToken(token);
+    return { ok: true, seat: now, queued: now < 0 };
+  }
+
+  leave(token) {
+    const g = this.guests.find((x) => x.token === token);
+    if (!g) return { ok: false, error: '不在桌上' };
+    this.guests = this.guests.filter((x) => x !== g);
+    this.saveGuests();
+    const seat = this.table.players.findIndex((p) => p.id === g.id);
+    if (seat >= 0) {
+      const p = this.table.players[seat];
+      p.sittingOut = true;
+      if (this.pending?.seat === seat) this.pending.resolve({ action: 'fold', source: 'left' });
+      if (this.status === 'ready' && this.table.handNo === 0 && !this.running) this.newGame();
+    }
+    this.log(`[lan] ${g.name} left`);
+    this.emit('lanChange');
+    this.changed();
+    return { ok: true };
   }
 
   snapshotPath() {
@@ -186,9 +262,11 @@ export class Game extends EventEmitter {
     if (this.pending) this.pending.resolve({ action: 'fold', source: 'reset' });
     this.gameId = Date.now().toString(36);
     const ais = c.ai.map((a, i) => ({ id: `ai${i + 1}`, kind: 'ai', ...a, stack: c.startingStack }));
-    // Every new game seats the AIs in a random order around you (you are always drawn at the bottom).
-    let seated = order ? order.map((id) => ais.find((a) => a.id === id)).filter(Boolean) : c.randomSeats === false ? ais : shuffle(ais.slice());
-    if (seated.length !== ais.length) seated = ais;
+    const guests = (this.guests ?? []).map((g) => ({ id: g.id, name: g.name, kind: 'human', guest: true, stack: c.startingStack }));
+    const others = [...guests, ...ais];
+    // Every new game seats everyone else in a random order around the host (each viewer is drawn at the bottom).
+    let seated = order ? order.map((id) => others.find((a) => a.id === id)).filter(Boolean) : c.randomSeats === false ? others : shuffle(others.slice());
+    if (seated.length !== others.length) seated = others;
     const seats = [{ id: 'human', name: c.humanName ?? '你', kind: 'human', stack: c.startingStack }, ...seated];
     const table = new Table({
       seats,
@@ -201,6 +279,7 @@ export class Game extends EventEmitter {
     });
     this.table = table;
     for (const p of this.table.players) {
+      p.out = null;
       p.buyIns = 1;
       p.handsWon = 0;
       p.handsPlayed = 0;
@@ -243,7 +322,16 @@ export class Game extends EventEmitter {
   async decide(p, legal, view) {
     if (p.kind === 'human') {
       return new Promise((resolve) => {
-        this.pending = { resolve, legal, handNo: view.handNo, turnId: `${view.handNo}-${view.log.length}` };
+        this.pending = { resolve, legal, seat: p.seat, handNo: view.handNo, turnId: `${view.handNo}-${view.log.length}` };
+        // LAN players who walk away should not stall the table: check / fold for them after a while.
+        const limit = p.guest ? Number(this.config.lan?.turnTimeoutMs ?? 90000) : 0;
+        if (limit > 0) {
+          const pending = this.pending;
+          pending.deadline = Date.now() + limit;
+          setTimeout(() => {
+            if (this.pending === pending) this.act(legal.canCheck ? 'check' : 'fold', 0, 'timeout', pending.turnId, p.seat);
+          }, limit);
+        }
         this.emit('humanTurn', { player: p, legal, view, turnId: this.pending.turnId });
         this.makeQuickReplies(p, legal, view, this.pending.turnId);
         this.changed();
@@ -273,20 +361,22 @@ export class Game extends EventEmitter {
   }
 
   // The human's table talk (any time during a hand).
-  say(text, source = 'web') {
+  say(text, source = 'web', seat = 0) {
     const t = String(text ?? '').trim();
     if (!t) return { ok: false, error: '说点什么呀' };
     const h = this.table.hand;
     if (!h || this.status !== 'playing') return { ok: false, error: '牌局进行中才能发言' };
-    const mine = h.log.filter((e) => e.action === 'chat' && e.seat === 0 && e.street === h.street).length;
+    const p = this.table.players[seat];
+    if (!p || p.kind !== 'human') return { ok: false, error: '入座之后才能发言' };
+    const mine = h.log.filter((e) => e.action === 'chat' && e.seat === seat && e.street === h.street).length;
     if (mine >= 5) return { ok: false, error: '这一轮说得够多啦，等下一轮' };
-    this.table.chat(this.human, t);
+    this.table.chat(p, t);
     this.lastHumanSource = source;
     return { ok: true };
   }
 
-  act(action, amount, source = 'web', turnId) {
-    if (!this.pending) return { ok: false, error: '现在不是你的回合' };
+  act(action, amount, source = 'web', turnId, seat = 0) {
+    if (!this.pending || this.pending.seat !== seat) return { ok: false, error: '现在不是你的回合' };
     if (turnId && turnId !== this.pending.turnId) return { ok: false, error: '这个按钮已经过期了' };
     const { resolve, legal } = this.pending;
     let a = String(action).toLowerCase();
@@ -305,7 +395,8 @@ export class Game extends EventEmitter {
     if (this.running) return { ok: false, error: '这一手还没结束' };
     if (this.status === 'gameOver') return { ok: false, error: '这一局已经结束了，开新局再来' };
     this.reloadTuning();
-    if (this.human.stack <= 0 && !this.spectating) return { ok: false, error: this.eliminationMode() ? '你已经出局了，开新局再来' : '你的筹码输光了，先补码（rebuy）' };
+    const humansIn = this.table.players.some((p) => p.kind === 'human' && p.stack > 0 && !p.sittingOut);
+    if (!humansIn && !this.spectating) return { ok: false, error: this.eliminationMode() ? '你已经出局了，开新局再来' : '你的筹码输光了，先补码（rebuy）' };
     const c = this.config;
     for (const p of this.table.players) {
       if (p.kind === 'ai' && p.stack <= 0 && !this.eliminationMode() && c.aiAutoRebuy !== false) {
@@ -387,7 +478,7 @@ export class Game extends EventEmitter {
     clearTimeout(this.autoTimer);
     this.autoNextAt = null;
     let ms = this.spectating ? (this.spectatePaused ? 0 : (this.config.spectateDelayMs ?? 3000)) : (this.config.autoNextHandMs ?? 0);
-    if (!ms || this.status !== 'handOver' || (!this.spectating && this.human.stack <= 0)) return;
+    if (!ms || this.status !== 'handOver' || (!this.spectating && !this.table.players.some((p) => p.kind === 'human' && p.stack > 0 && !p.sittingOut))) return;
     // Leave time to read a defeat screen before the next hand starts.
     if (this.knockout) ms = Math.max(ms, this.config.knockoutDelayMs ?? 12000);
     const no = this.table.handNo;
@@ -488,20 +579,53 @@ export class Game extends EventEmitter {
       this.emit('eliminated', { player: p, by: t.players[p.eliminatedBy] });
       this.log(`[game] ${p.name} eliminated in hand ${h.no}, place ${p.place}, by ${t.players[p.eliminatedBy]?.name}`);
     });
-    const me = this.human;
-    // One defeat screen per hand: prefer the AI you knocked out yourself.
-    const shown = busted.filter((p) => p.kind === 'ai').sort((a, b) => (a.eliminatedBy === 0 ? -1 : 0) - (b.eliminatedBy === 0 ? -1 : 0))[0];
-    if (shown && !busted.includes(me) && remaining > 1) this.knockOut(shown);
-    if (busted.includes(me)) this.finish('defeat');
-    else if (remaining === 1 && me.stack > 0) {
-      me.place = 1;
-      this.finish('victory');
-    } else if (remaining === 1 && this.spectating) {
-      const champ = t.players.find((p) => p.stack > 0);
-      champ.place = 1;
+    const isHuman = (p) => p?.kind === 'human';
+    const bustedHumans = busted.filter(isHuman);
+    const humansAlive = t.players.filter((p) => isHuman(p) && p.stack > 0 && !p.sittingOut);
+    // One defeat screen per hand: prefer an AI a human knocked out.
+    const shown = busted.filter((p) => p.kind === 'ai').sort((a, b) => (isHuman(t.players[b.eliminatedBy]) ? 1 : 0) - (isHuman(t.players[a.eliminatedBy]) ? 1 : 0))[0];
+    if (shown && !bustedHumans.length && remaining > 1) this.knockOut(shown);
+    if (bustedHumans.length && !humansAlive.length && !this.spectating) {
+      // The last human is out: the game is over for the people at the table (they may watch the AIs finish).
+      this.finish('defeat', bustedHumans.sort((a, b) => a.place - b.place)[0]);
+    } else if (remaining === 1) {
+      const winner = t.players.find((p) => p.stack > 0);
+      winner.place = 1;
       this.spectating = false;
-      this.finish('champion', champ);
-    }
+      this.finish(isHuman(winner) ? 'victory' : 'champion', winner);
+    } else for (const p of bustedHumans) this.personalDefeat(p);
+  }
+
+  // A human busts while other humans play on: a defeat screen just for them.
+  personalDefeat(p) {
+    const h = this.table.hand;
+    const reveal = (seat) => this.lastResult?.reveals?.find((r) => r.seat === seat);
+    const rival = this.table.players[p.eliminatedBy];
+    const out = {
+      type: 'defeat',
+      style: this.config.defeatStyle === 'classic' ? 'classic' : 'flirty',
+      subject: p.seat,
+      place: p.place,
+      players: this.table.players.length,
+      handNo: h.no,
+      rival: rival?.seat,
+      board: h.board.slice(),
+      myHole: p.hole.slice(),
+      myHand: reveal(p.seat)?.hand ?? null,
+      rivalHole: reveal(rival?.seat)?.hole ?? null,
+      rivalHand: reveal(rival?.seat)?.hand ?? null,
+      peakStack: p.peakStack,
+      handsPlayed: p.handsPlayed,
+      handsWon: p.handsWon,
+      taunt: null,
+    };
+    p.out = out;
+    this.fetchTaunt('defeat', rival, out, p).then(({ say, penalty }) => {
+      out.taunt = say;
+      out.penalty = penalty;
+      this.emit('personalDefeat', { player: p, out });
+      this.changed();
+    });
   }
 
   // After you bust: the remaining AIs keep playing until one is left (hands deal themselves).
@@ -535,7 +659,7 @@ export class Game extends EventEmitter {
     const k = {
       seat: p.seat,
       by,
-      byHuman: by === 0,
+      byHuman: this.table.players[by]?.kind === 'human',
       handNo: h.no,
       place: p.place,
       players: this.table.players.length,
@@ -569,7 +693,7 @@ export class Game extends EventEmitter {
     if (!p.model) return fallback;
     const cards = (cs) => (cs?.length ? cs.map(cardLabel).join(' ') : '未亮牌');
     const role = p.persona ? `你的角色形象（${p.title ?? p.name}）：${p.persona}\n` : '';
-    const who = k.byHuman ? '人类玩家' : `${winner?.name}${winner?.title ? `（${winner.title}）` : ''}`;
+    const who = k.byHuman ? `人类玩家「${winner?.name ?? '你'}」` : `${winner?.name}${winner?.title ? `（${winner.title}）` : ''}`;
     const situation = `德州扑克淘汰赛第 ${k.handNo} 手，你（${p.name}）被${who}打到筹码归零，淘汰出局，最终第 ${k.place} 名。你的牌 ${cards(k.theirHole)}${k.theirHand ? `（${k.theirHand}）` : ''}，对方的牌 ${cards(k.myHole)}${k.myHand ? `（${k.myHand}）` : ''}，公共牌 ${cards(k.board)}。`;
     const ask = !k.byHuman
       ? `这是你的战败画面，人类玩家在一旁看着。用你的人设说一句不甘心又带点羞恼的出局台词（中文，40 字以内），可以冲着淘汰你的${winner?.name ?? '对手'}放句狠话，也可以对观战的人类撒个娇。可以调情，但不要露骨，不涉及性行为或裸露。`
@@ -592,27 +716,29 @@ export class Game extends EventEmitter {
     }
   }
 
-  finish(type, champion) {
+  // type: defeat (subject = last human out), victory (subject = winning human), champion (subject = winning AI).
+  finish(type, subject) {
     const t = this.table;
     const h = t.hand;
-    const me = this.human;
+    const me = type === 'champion' ? this.human : (subject ?? this.human);
     const reveal = (seat) => this.lastResult?.reveals?.find((r) => r.seat === seat);
     const rival =
       type === 'champion'
-        ? champion
+        ? subject
         : type === 'defeat'
           ? t.players[me.eliminatedBy]
-          : t.players.filter((p) => p.kind === 'ai').sort((a, b) => (a.place ?? 99) - (b.place ?? 99))[0];
+          : t.players.filter((p) => p !== me).sort((a, b) => (a.place ?? 99) - (b.place ?? 99))[0];
     this.status = 'gameOver';
     this.gameOver = {
       type,
+      subject: subject?.seat ?? me.seat,
       place: me.place,
       players: t.players.length,
       handNo: h.no,
       rival: rival?.seat,
       board: h.board.slice(),
       myHole: me.hole.slice(),
-      myHand: reveal(0)?.hand ?? null,
+      myHand: reveal(me.seat)?.hand ?? null,
       rivalHole: reveal(rival?.seat)?.hole ?? null,
       rivalHand: reveal(rival?.seat)?.hand ?? null,
       peakStack: me.peakStack,
@@ -622,7 +748,7 @@ export class Game extends EventEmitter {
     };
     const no = h.no;
     this.gameOver.style = this.config.defeatStyle === 'classic' ? 'classic' : 'flirty';
-    this.fetchTaunt(type, rival).then(({ say, penalty }) => {
+    this.fetchTaunt(type, rival, this.gameOver, me).then(({ say, penalty }) => {
       if (!this.gameOver || this.gameOver.handNo !== no) return;
       this.gameOver.taunt = say;
       this.gameOver.penalty = penalty;
@@ -632,8 +758,8 @@ export class Game extends EventEmitter {
     });
   }
 
-  async fetchTaunt(type, rival) {
-    const g = this.gameOver;
+  async fetchTaunt(type, rival, g = this.gameOver, subject = this.human) {
+    const human = `人类玩家「${subject?.name ?? '你'}」`;
     const flirty = g.style === 'flirty';
     const fallback =
       type === 'champion'
@@ -654,10 +780,10 @@ export class Game extends EventEmitter {
     const role = rival.persona ? `你的角色形象（${rival.title ?? rival.name}）：${rival.persona}\n` : '';
     const situation =
       type === 'champion'
-        ? `德州扑克淘汰赛打到第 ${g.handNo} 手，你（${rival.name}）把其他 AI 全部淘汰，赢下整张桌子成为冠军。人类玩家早就出局了（第 ${g.place} 名），一直在旁边观战。`
+        ? `德州扑克淘汰赛打到第 ${g.handNo} 手，你（${rival.name}）把其他 AI 全部淘汰，赢下整张桌子成为冠军。人类玩家早就出局了，一直在旁边观战。`
         : type === 'defeat'
-          ? `德州扑克淘汰赛第 ${g.handNo} 手，你（${rival.name}）把人类玩家打到筹码归零，对方被淘汰出局，最终第 ${g.place} 名。你的牌 ${mine}，对方的牌 ${theirs}，公共牌 ${cards(g.board)}。`
-          : `德州扑克淘汰赛打到最后，你（${rival.name}）是最后一个被人类玩家淘汰的 AI，人类赢下了整张桌子。`;
+          ? `德州扑克淘汰赛第 ${g.handNo} 手，你（${rival.name}）把${human}打到筹码归零，对方被淘汰出局，最终第 ${g.place} 名。你的牌 ${mine}，对方的牌 ${theirs}，公共牌 ${cards(g.board)}。`
+          : `德州扑克淘汰赛打到最后，你（${rival.name}）是最后一个被${human}淘汰的对手，对方赢下了整张桌子。`;
     const ask =
       type === 'champion'
         ? flirty
@@ -707,11 +833,13 @@ export class Game extends EventEmitter {
   }
 
   // Public state for the human's clients: AI hole cards stay hidden until shown down.
-  state() {
+  // viewer: the seat this client plays (-1 = watching). Private cards and turn controls follow it.
+  state(viewer = 0) {
     const t = this.table;
+    const humanInHand = t.players.some((p) => p.kind === 'human' && p.inHand);
     const h = t.hand;
     // Spectators (after you bust) see every hole card, like a TV broadcast.
-    const showAll = this.config.revealAllCards === true || (this.spectating && !this.human.inHand);
+    const showAll = this.config.revealAllCards === true || (this.spectating && !humanInHand);
     const labels = h ? positionLabels(t.viewFor(null)) : {};
     return {
       gameId: this.gameId,
@@ -735,7 +863,7 @@ export class Game extends EventEmitter {
       thinking: this.thinking,
       players: t.players.map((p) => ({
         seat: p.seat,
-        name: p.name,
+        name: p.seat === 0 && viewer !== 0 ? shownName(p.name, true) : p.name,
         kind: p.kind,
         model: p.model,
         avatar: p.avatar,
@@ -756,7 +884,9 @@ export class Game extends EventEmitter {
         folded: p.folded,
         allIn: p.allIn,
         position: labels[p.seat] ?? '',
-        hole: p.kind === 'human' || p.shown || showAll ? p.hole : p.inHand && !p.folded ? p.hole.map(() => null) : [],
+        hole: p.seat === viewer || p.shown || showAll ? p.hole : p.inHand && !p.folded ? p.hole.map(() => null) : [],
+        guest: p.guest || undefined,
+        sittingOut: p.sittingOut || undefined,
         lastAction: p.lastAction && h && p.lastAction.street === h.street ? { ...p.lastAction, text: describeAction(p.lastAction) } : null,
         lastSay: p.lastAction?.say ?? null,
         lastChat: p.lastChat && h && p.lastChat.street === h.street ? p.lastChat : null,
@@ -764,6 +894,7 @@ export class Game extends EventEmitter {
         net: p.stack - p.buyIns * this.config.startingStack,
         handsWon: p.handsWon,
         handsPlayed: p.handsPlayed,
+        peakStack: p.peakStack,
         place: p.place ?? null,
         eliminatedBy: p.eliminatedBy ?? null,
         eliminatedHand: p.eliminatedHand ?? null,
@@ -778,8 +909,11 @@ export class Game extends EventEmitter {
       log: (h?.log ?? []).map((e) => ({ ...e, text: describeAction(e) })),
       result: this.lastResult,
       recent: this.recent.slice(-8),
-      legal: this.pending ? { ...this.pending.legal, turnId: this.pending.turnId } : null,
-      quickReplies: this.pending && this.quick?.turnId === this.pending.turnId ? (this.quick.items ?? 'loading') : null,
+      you: viewer,
+      waitingFor: this.pending?.seat ?? -1,
+      myOut: t.players[viewer]?.out ?? null,
+      legal: this.pending && this.pending.seat === viewer ? { ...this.pending.legal, turnId: this.pending.turnId, deadline: this.pending.deadline } : null,
+      quickReplies: this.pending && this.pending.seat === viewer && this.quick?.turnId === this.pending.turnId ? (this.quick.items ?? 'loading') : null,
       slack: this.slackInfo ?? null,
     };
   }

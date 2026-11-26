@@ -554,3 +554,14 @@ aside .panel:first-child { flex: 1 1 auto; min-height: 160px; display: flex; fle
   100% { opacity: 0; transform: translateY(-50%) scale(.96); }
 }
 .felt { inset: 13% var(--fx, 8%) 14%; }
+
+/* ---------- LAN ---------- */
+.hidden { display: none !important; }
+.mpanel.small { width: min(560px, 94vw); height: auto; max-height: 86vh; }
+.lanurls { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.lanurls code { font-size: 16px; background: #0d1117; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; user-select: all; }
+.lanplayers { display: flex; flex-direction: column; gap: 6px; }
+.lanplayers button { padding: 2px 8px; font-size: 12px; margin-left: 8px; }
+#lanChip { border-color: #2ea043; }
+.seat.guest .plate { border-color: #8957e5; }
+.shead { margin: 18px 0 8px; font-size: 14px; }

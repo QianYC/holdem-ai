@@ -89,3 +89,41 @@ test('auto next hand deals the next hand by itself', { timeout: 60000 }, async (
   await new Promise((r) => setTimeout(r, 200));
   assert.equal(game.table.handNo, no, 'stops after switching off');
 });
+
+test('LAN: several humans share the table, each sees only their own cards', { timeout: 120000 }, async () => {
+  const game = new Game({ ...config(), ai: config().ai.slice(0, 3) }, { log: () => {} });
+  const tokA = 'a'.repeat(32);
+  const tokB = 'b'.repeat(32);
+  assert.equal(game.join(tokA, 'Alice').ok, true);
+  assert.equal(game.join(tokB, 'Bob').ok, true);
+  assert.equal(game.join('c'.repeat(32), 'Alice').ok, false, 'names are unique');
+  const seatA = game.seatOfToken(tokA);
+  const seatB = game.seatOfToken(tokB);
+  assert.ok(seatA > 0 && seatB > 0 && seatA !== seatB, 'guests are seated before the first hand');
+  assert.equal(game.table.players.length, 6);
+  game.on('humanTurn', ({ player, legal, turnId }) =>
+    setImmediate(() => {
+      assert.equal(game.act('check', 0, 'test', turnId, (player.seat + 1) % 6).ok, false, 'nobody can act for someone else');
+      game.act(legal.canRaise && Math.random() < 0.5 ? 'raise' : legal.canCall ? 'call' : 'check', legal.maxTo, 'test', turnId, player.seat);
+    }),
+  );
+  game.nextHand('test');
+  await new Promise((r) => setTimeout(r, 0));
+  const view = game.state(seatA);
+  assert.equal(view.you, seatA);
+  assert.ok(view.players[seatA].hole.every(Boolean), 'Alice sees her cards');
+  assert.ok(view.players[seatB].hole.every((c) => c === null), "Alice does not see Bob's cards");
+  assert.ok(game.state(0).players[seatA].hole.every((c) => c === null), "the host does not see Alice's cards");
+  for (let i = 0; i < 400 && game.status !== 'gameOver'; i++) {
+    if (game.running) await game.running;
+    if (game.status === 'gameOver') break;
+    const r = game.nextHand('test');
+    if (!r.ok) break;
+    await game.running;
+  }
+  const s = game.state(0);
+  assert.equal(s.status, 'gameOver');
+  assert.equal(s.players.reduce((a, p) => a + p.stack, 0), 1200);
+  const humansOut = s.players.filter((p) => p.kind === 'human' && p.place && p.place > 1);
+  for (const h of humansOut) if (s.gameOver.subject !== h.seat && s.gameOver.type !== 'defeat') assert.ok(game.table.players[h.seat].out || h.place, 'busted humans get a result');
+});

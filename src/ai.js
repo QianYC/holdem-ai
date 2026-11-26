@@ -81,6 +81,9 @@ export function describeAction(e) {
   return `${verb}${amt}${e.allIn ? '（全下）' : ''}`;
 }
 
+// The host's default display name is 「你」, which would confuse the models (and other people): call them by role.
+export const shownName = (name, isHuman) => (isHuman && (!name || name === '你') ? '房主' : name);
+
 // Table talk lines as the models read them.
 function historyLines(log, board, cards) {
   let street = '';
@@ -91,8 +94,8 @@ function historyLines(log, board, cards) {
       const boardNow = street === 'flop' ? board.slice(0, 3) : street === 'turn' ? board.slice(0, 4) : board;
       history.push(`【${STREET_NAMES[street]}】${street === 'preflop' ? '' : ` 公共牌 ${cards(boardNow)}`}`);
     }
-    if (e.action === 'chat') history.push(`  ${e.name} 说：「${e.say}」`);
-    else history.push(`  ${e.name}: ${describeAction(e)}${e.say ? ` —「${e.say}」` : ''}${e.emote ? ` [发了表情：${STICKER_NAMES[e.emote] ?? e.emote}]` : ''}`);
+    if (e.action === 'chat') history.push(`  ${shownName(e.name, e.seat === 0)} 说：「${e.say}」`);
+    else history.push(`  ${shownName(e.name, e.seat === 0)}: ${describeAction(e)}${e.say ? ` —「${e.say}」` : ''}${e.emote ? ` [发了表情：${STICKER_NAMES[e.emote] ?? e.emote}]` : ''}`);
   }
   return history;
 }
@@ -146,7 +149,7 @@ export function buildPrompt(player, legal, view, recent) {
     .map((p) => {
       const status = p.folded ? '已弃牌' : p.allIn ? '已全下' : '在局';
       const me = p.seat === player.seat ? '  ← 你' : '';
-      return `- 座位${p.seat} ${p.name}（${p.model ?? '人类玩家'}）[${pos[p.seat] ?? ''}] 剩余筹码 ${p.stack}，本轮已下 ${p.bet}，本手共投入 ${p.total}，${status}${me}`;
+      return `- 座位${p.seat} ${shownName(p.name, !p.model)}（${p.model ?? '人类玩家'}）[${pos[p.seat] ?? ''}] 剩余筹码 ${p.stack}，本轮已下 ${p.bet}，本手共投入 ${p.total}，${status}${me}`;
     })
     .join('\n');
   const history = historyLines(view.log, view.board, cards);
@@ -184,7 +187,7 @@ export function buildPrompt(player, legal, view, recent) {
 
 function systemPrompt(player, tableSize) {
   return [
-    `你是「${player.name}」，一个由 ${player.model} 驱动的德州扑克 AI 玩家，正坐在一张 ${tableSize} 人无限注德州扑克现金桌上，对手里有一个人类和其他几个不同的 AI 模型。`,
+    `你是「${player.name}」，一个由 ${player.model} 驱动的德州扑克 AI 玩家，正坐在一张 ${tableSize} 人无限注德州扑克现金桌上，对手里有人类玩家，也有其他 AI 模型。`,
     '这是用户在自己电脑上运行的娱乐性扑克游戏，筹码是虚拟的，不涉及真钱；用户邀请各个 AI 模型同桌对战，你只需要正常打牌。',
     ...(player.persona ? [`你的角色形象（${player.title ?? player.name}）：${player.persona} 牌桌发言要符合这个人设，可以俏皮、暧昧、撩人，但不要露骨。`] : []),
     '目标是长期赢下尽可能多的筹码。请像高水平玩家一样思考：位置、底池赔率、对手范围、筹码深度，适度诈唬。',

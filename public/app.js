@@ -6,6 +6,18 @@ const fmt = (n) => Number(n).toLocaleString('en-US');
 const SUIT = { s: '♠', h: '♥', d: '♦', c: '♣' };
 const STREET = { preflop: '翻牌前', flop: '翻牌', turn: '转牌', river: '河牌' };
 let S = null;
+// Each browser has its own player token (LAN mode); the host on the server machine needs none.
+const TOKEN = (() => {
+  let t = localStorage.getItem('holdem.player');
+  if (!t) {
+    t = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+    localStorage.setItem('holdem.player', t);
+  }
+  return t;
+})();
+const you = () => (S && S.you >= 0 ? S.you : -1);
+const isMe = (p) => p && p.seat === you();
+const nameOf = (p) => (isMe(p) ? '你' : (p?.name ?? ''));
 const POSITION_TIPS = {
   BTN: '庄家位（按钮位）：翻牌后最后一个行动，位置最好',
   'BTN/SB': '单挑时庄家同时是小盲：翻牌前先行动，翻牌后最后行动',
@@ -56,7 +68,7 @@ function playCues(prev, s) {
   if (s.legal && s.legal.turnId !== prev.legal?.turnId) audio.sfx('turn');
   if (s.status === 'gameOver' && prev.status !== 'gameOver') audio.sfx(s.gameOver?.type === 'defeat' ? 'gameover' : 'victory');
   else if (s.knockout && !prev.knockout) audio.sfx('knockout');
-  else if (s.status === 'handOver' && prev.status === 'playing' && s.result?.won?.[0] > 0) audio.sfx('win');
+  else if (s.status === 'handOver' && prev.status === 'playing' && s.you >= 0 && s.result?.won?.[s.you] > 0) audio.sfx('win');
 }
 
 function cardHtml(c, cls = '') {
@@ -75,13 +87,13 @@ function stickerHtml(p, id, cls) {
 
 // Round avatar: the character's face cropped from the portrait, or the emoji.
 function faceHtml(p, cls = 'avatar') {
-  if (p.kind === 'human') return `<span class="${cls}" style="background:#388bfd">🙂</span>`;
+  if (p.kind === 'human') return `<span class="${cls}" style="background:${isMe(p) ? '#388bfd' : '#8957e5'}">${isMe(p) ? '🙂' : '🧑'}</span>`;
   if (p.portrait) return `<span class="${cls} pic" style="background-image:url('${esc(p.portrait)}');background-position:${esc(p.faceFocus ?? '50% 12%')};border-color:${p.color ?? '#888'}"></span>`;
   return `<span class="${cls}" style="background:${p.color ?? '#388bfd'}">${p.avatar ?? '🤖'}</span>`;
 }
 
 async function post(url, body = {}) {
-  const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-player': TOKEN }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
   if (j && j.ok === false && j.error) toast(j.error);
   return j;
@@ -102,7 +114,8 @@ function render(s) {
   if (s.serverNow) clockSkew = s.serverNow - Date.now();
   playCues(S, s);
   S = s;
-  const subtitle = `你 vs ${s.players.length - 1} 个 AI`;
+  const humans = s.players.filter((p) => p.kind === 'human').length;
+  const subtitle = humans > 1 ? `${humans} 位真人 vs ${s.players.length - humans} 个 AI` : `你 vs ${s.players.length - 1} 个 AI`;
   if ($('brandSub').textContent !== subtitle) {
     $('brandSub').textContent = subtitle;
     document.title = `德州扑克 · ${subtitle}`;
@@ -119,15 +132,18 @@ function render(s) {
   const winners = new Set((s.result?.pots ?? []).flatMap((p) => p.winners));
   const reveals = new Map((s.result?.reveals ?? []).map((r) => [r.seat, r]));
   let html = '';
-  s.players.forEach((p, i) => {
+  const base = s.you >= 0 ? s.you : 0;
+  s.players.forEach((p) => {
+    const i = (p.seat - base + n) % n;
     const [x, y] = seatXY(i, n);
     const acting = s.toAct === p.seat || s.thinking?.seat === p.seat;
     const dead = Boolean(p.place) && p.stack <= 0;
-    const cls = ['seat', p.kind === 'human' ? 'me' : '', dead ? 'dead' : '', p.folded && p.inHand ? 'folded' : '', (!p.inHand && s.status === 'playing') || p.stack <= 0 ? 'out' : '', acting && s.status === 'playing' ? 'acting' : '', winners.has(p.seat) && (s.status === 'handOver' || s.status === 'gameOver') ? 'winner' : ''].join(' ');
+    const cls = ['seat', isMe(p) ? 'me' : p.kind === 'human' ? 'guest' : '', dead ? 'dead' : '', p.folded && p.inHand ? 'folded' : '', (!p.inHand && s.status === 'playing') || p.stack <= 0 ? 'out' : '', acting && s.status === 'playing' ? 'acting' : '', winners.has(p.seat) && (s.status === 'handOver' || s.status === 'gameOver') ? 'winner' : ''].join(' ');
     const cards = (p.hole ?? []).map((c) => cardHtml(c, 'small')).join('');
     let status = '';
     if (s.thinking?.seat === p.seat) status = '<span class="thinking-dots">思考中</span>';
-    else if (s.toAct === p.seat && p.kind === 'human') status = '<b style="color:var(--gold)">轮到你了</b>';
+    else if (s.toAct === p.seat && isMe(p)) status = '<b style="color:var(--gold)">轮到你了</b>';
+    else if (s.toAct === p.seat && p.kind === 'human') status = '<span class="thinking-dots">思考中</span>';
     else if (p.lastAction) status = esc(p.lastAction.text) + (p.lastAction.fallback ? ' <span class="fallback" title="模型调用失败，用了内置策略">⚙托管</span>' : '');
     else if (p.allIn) status = '全下';
     if (s.status === 'handOver' && reveals.has(p.seat)) status = esc(reveals.get(p.seat).hand);
@@ -147,8 +163,8 @@ function render(s) {
       <div class="cards">${cards}</div>
       <div class="plate">${bubble}
         ${p.position ? `<span class="pos" title="${esc(POSITION_TIPS[p.position.split('+')[0]] ?? POSITION_TIPS[p.position] ?? '')}">${p.position}</span>` : ''}
-        <div class="name">${faceHtml(p)}${esc(p.name)}</div>
-        ${p.model ? `<div class="model">${esc(p.model)}</div>` : '<div class="model">人类玩家</div>'}
+        <div class="name">${faceHtml(p)}${esc(isMe(p) && humans > 1 && p.name !== '你' ? `${p.name}（你）` : p.name)}</div>
+        ${p.model ? `<div class="model">${esc(p.model)}</div>` : `<div class="model">${p.sittingOut ? '已离开' : '真人玩家'}</div>`}
         <div class="stack">${fmt(p.stack)}</div>
         <div class="status">${status}</div>
       </div></div>`;
@@ -172,12 +188,13 @@ function render(s) {
   let banner = '';
   if ((s.status === 'handOver' || s.status === 'gameOver') && s.result) {
     banner = s.result.pots
-      .map((pot) => `🏆 ${pot.winners.map((w) => (w === 0 ? '你' : s.players[w].name)).join('、')} 赢得 ${fmt(pot.amount)}${pot.hand ? `（${pot.hand}）` : ''}`)
+      .map((pot) => `🏆 ${pot.winners.map((w) => esc(nameOf(s.players[w]))).join('、')} 赢得 ${fmt(pot.amount)}${pot.hand ? `（${pot.hand}）` : ''}`)
       .join('<br>');
-    for (const e of s.eliminations ?? []) banner += `<br>💀 ${e.seat === 0 ? '你' : esc(e.name)} 出局（第 ${e.place} 名）`;
+    for (const e of s.eliminations ?? []) banner += `<br>💀 ${esc(nameOf(s.players[e.seat]))} 出局（第 ${e.place} 名）`;
   } else if (s.status === 'ready') banner = s.eliminationMode ? '淘汰赛：筹码归零即出局。点「开始」发牌' : '点「开始」发牌';
   $('banner').innerHTML = banner;
 
+  renderLan(s);
   renderControls(s);
   renderChat(s);
   renderLog(s);
@@ -208,48 +225,60 @@ function startCountdown(at) {
 
 function renderControls(s) {
   const c = $('controls');
-  const me = s.players[0];
+  const me = s.you >= 0 ? s.players[s.you] : null;
+  const host = s.isHost;
   const L = s.legal;
   if (!L) {
+    const waitHost = '<span class="muted">等待房主操作…</span>';
+    if (!me) {
+      // Joined on the LAN but no seat yet, or just watching.
+      c.innerHTML = `<div class="info">${s.lan?.joined ? `👋 ${esc(s.lan.myName ?? '')}，你已加入，房主开下一局时入座。` : '👀 你在旁观。'}${s.status === 'playing' ? ' 牌局进行中…' : ''}</div>${s.lan?.joined ? '<button class="ghost" id="leaveBtn">离开</button>' : '<button class="primary" id="joinBtn">加入牌桌</button>'}`;
+      if ($('leaveBtn')) $('leaveBtn').onclick = () => post('/api/leave');
+      if ($('joinBtn')) $('joinBtn').onclick = () => openJoin(true);
+      return;
+    }
     if (s.status === 'gameOver') {
       const g = s.gameOver;
       const canSpectate = g?.type === 'defeat' && s.players.filter((p) => p.stack > 0).length >= 2;
-      const info =
-        g?.type === 'victory' ? '👑 你赢下了整张桌子' : g?.type === 'champion' ? `🏆 ${esc(s.players[g.rival]?.name ?? '')} 夺冠，你最终第 ${g.place} 名` : `💀 你已出局（第 ${g?.place ?? '-'} 名）`;
-      c.innerHTML = `<div class="info">${info}</div><button class="ghost" id="showOverBtn">查看结算</button>${canSpectate ? '<button class="ghost" id="spectateBtn">👀 继续观战</button>' : ''}<button class="primary" id="againBtn">🔄 再来一局</button>`;
+      const winner = g?.type === 'victory' || g?.type === 'champion' ? s.players[g.subject ?? g.rival] : null;
+      const info = winner ? (isMe(winner) ? '👑 你赢下了整张桌子' : `🏆 ${esc(winner.name)} 夺冠，你最终第 ${me.place ?? '-'} 名`) : `💀 你已出局（第 ${me.place ?? g?.place ?? '-'} 名）`;
+      c.innerHTML = `<div class="info">${info}</div><button class="ghost" id="showOverBtn">查看结算</button>${host ? `${canSpectate ? '<button class="ghost" id="spectateBtn">👀 继续观战</button>' : ''}<button class="primary" id="againBtn">🔄 再来一局</button>` : waitHost}`;
       $('showOverBtn').onclick = () => {
         overDismissed = null;
         renderOver(S);
       };
       if ($('spectateBtn')) $('spectateBtn').onclick = () => post('/api/spectate');
-      $('againBtn').onclick = newGameAndDeal;
+      if ($('againBtn')) $('againBtn').onclick = newGameAndDeal;
       return;
     }
     if (s.spectating) {
       const alive = s.players.filter((p) => p.stack > 0).length;
       const who = s.thinking ? s.players[s.thinking.seat] : null;
       c.innerHTML = `<div class="info">👀 观战中 · 场上还剩 <b>${alive}</b> 人${who ? ` · 等待 <b>${esc(who.name)}</b> 思考<span class="thinking-dots"></span>` : ''}${s.spectatePaused ? ' · 已暂停' : ''}</div>
-        <button class="ghost" id="pauseBtn">${s.spectatePaused ? '▶ 继续' : '⏸ 暂停'}</button>
-        <button class="primary" id="againBtn">🔄 结束观战，开新局</button>`;
-      $('pauseBtn').onclick = () => post('/api/spectate/pause', { paused: !s.spectatePaused });
-      $('againBtn').onclick = () => {
-        if (confirm('结束观战并重新开始？')) newGameAndDeal();
-      };
+        ${host ? `<button class="ghost" id="pauseBtn">${s.spectatePaused ? '▶ 继续' : '⏸ 暂停'}</button><button class="primary" id="againBtn">🔄 结束观战，开新局</button>` : ''}`;
+      if ($('pauseBtn')) $('pauseBtn').onclick = () => post('/api/spectate/pause', { paused: !s.spectatePaused });
+      if ($('againBtn'))
+        $('againBtn').onclick = () => {
+          if (confirm('结束观战并重新开始？')) newGameAndDeal();
+        };
       return;
     }
     if (s.status === 'playing') {
-      const who = s.thinking ? s.players[s.thinking.seat] : null;
-      c.innerHTML = `<div class="info">${me.folded && me.inHand ? '你已弃牌，' : ''}${who ? `等待 <b>${esc(who.name)}</b>（${esc(who.model)}）思考<span class="thinking-dots"></span>` : '进行中…'}</div>${autoNextToggle(s)}`;
-    } else if (me.stack <= 0) {
-      c.innerHTML = `<div class="info">你的筹码输光了。</div><button class="gold" id="rebuyBtn">补码 ${fmt(s.startingStack)} 并继续</button>`;
-      $('rebuyBtn').onclick = async () => {
-        const r = await post('/api/rebuy');
-        if (r.ok) post('/api/next');
-      };
+      const who = s.thinking ? s.players[s.thinking.seat] : s.waitingFor >= 0 ? s.players[s.waitingFor] : null;
+      const out = me.stack <= 0 && me.place;
+      c.innerHTML = `<div class="info">${out ? '你已出局，正在观看。' : me.folded && me.inHand ? '你已弃牌，' : ''}${who ? `等待 <b>${esc(nameOf(who))}</b>${who.model ? `（${esc(who.model)}）` : ''}思考<span class="thinking-dots"></span>` : '进行中…'}</div>${host ? autoNextToggle(s) : ''}`;
+    } else if (me.stack <= 0 && !s.eliminationMode) {
+      c.innerHTML = `<div class="info">你的筹码输光了。</div>${host ? `<button class="gold" id="rebuyBtn">补码 ${fmt(s.startingStack)} 并继续</button>` : waitHost}`;
+      if ($('rebuyBtn'))
+        $('rebuyBtn').onclick = async () => {
+          const r = await post('/api/rebuy');
+          if (r.ok) post('/api/next');
+        };
     } else {
       const left = s.autoNextAt ? Math.max(0, Math.ceil((s.autoNextAt - Date.now()) / 1000)) : null;
-      c.innerHTML = `<div class="info">${s.status === 'ready' ? `${s.players.length} 人桌，你的筹码 <b>${fmt(me.stack)}</b>。` : `这一手结束了。${left != null ? `<span class="autoLeft">${left}</span> 秒后自动发下一手` : ''}`}</div>${autoNextToggle(s)}<button class="primary" id="nextBtn">${s.status === 'ready' ? '开始' : '下一手 ▶'}</button>`;
-      $('nextBtn').onclick = () => post('/api/next');
+      const intro = s.status === 'ready' ? `${s.players.length} 人桌，你的筹码 <b>${fmt(me.stack)}</b>。` : `这一手结束了。${left != null ? `<span class="autoLeft">${left}</span> 秒后自动发下一手` : ''}`;
+      c.innerHTML = `<div class="info">${intro}</div>${host ? `${autoNextToggle(s)}<button class="primary" id="nextBtn">${s.status === 'ready' ? '开始' : '下一手 ▶'}</button>` : left != null ? '' : waitHost}`;
+      if ($('nextBtn')) $('nextBtn').onclick = () => post('/api/next');
       if (left != null) startCountdown(s.autoNextAt);
     }
     bindAutoNext(s);
@@ -267,8 +296,9 @@ function renderControls(s) {
     ['¾池', L.isBet ? (potAfter * 3) / 4 : L.currentBet + (potAfter * 3) / 4],
     ['1池', L.isBet ? potAfter : L.currentBet + potAfter],
   ].map(([k, v]) => [k, Math.max(L.minTo, Math.min(L.maxTo, Math.round(v / step) * step))]);
+  if (L.deadline) setTimeout(() => startCountdown(L.deadline), 0);
   c.innerHTML = `
-    <div class="info">底池 <b>${fmt(L.pot)}</b> · ${L.canCall ? `需跟 <b>${fmt(L.toCall)}</b>` : '可以过牌'} · 你的筹码 <b>${fmt(L.stack)}</b></div>
+    <div class="info">底池 <b>${fmt(L.pot)}</b> · ${L.canCall ? `需跟 <b>${fmt(L.toCall)}</b>` : '可以过牌'} · 你的筹码 <b>${fmt(L.stack)}</b>${L.deadline ? ` · <span class="autoLeft">${Math.max(0, Math.ceil((L.deadline - Date.now()) / 1000))}</span> 秒内行动` : ''}</div>
     ${L.canCall ? '<button class="danger" data-a="fold">弃牌</button>' : ''}
     ${L.canCheck ? '<button class="primary" data-a="check">过牌</button>' : `<button class="primary" data-a="call">跟注 ${fmt(L.toCall)}${L.toCall >= L.stack ? '（全下）' : ''}</button>`}
     ${
@@ -305,7 +335,7 @@ function renderControls(s) {
 let quickKey = null;
 function renderChat(s) {
   const bar = $('chatbar');
-  bar.classList.toggle('hidden', s.status !== 'playing');
+  bar.classList.toggle('hidden', s.status !== 'playing' || s.you < 0);
   const q = s.quickReplies;
   const key = q ? `${s.legal?.turnId}-${Array.isArray(q) ? q.length : 'loading'}` : 'none';
   if (key === quickKey) return;
@@ -381,9 +411,9 @@ function renderKnockout(s) {
     ? `<img src="${esc(pose)}" alt="" style="object-position:${esc(p.losePortrait ? '50% 30%' : (p.portraitPos ?? '50% 0%'))}">`
     : `<span class="emoji">${p.avatar ?? '🤖'}</span>`;
   const alive = s.players.filter((x) => x.stack > 0).length;
-  const byHuman = k.byHuman !== false;
   const winner = s.players[k.by ?? 0];
-  const winnerName = byHuman ? '你' : esc(winner?.name ?? '对手');
+  const byYou = isMe(winner);
+  const winnerName = esc(nameOf(winner) || '对手');
   const left = s.autoNextAt ? Math.max(0, Math.ceil((s.autoNextAt - Date.now()) / 1000)) : null;
   const html = `
     <div class="box flirty-box ko-box">
@@ -395,8 +425,8 @@ function renderKnockout(s) {
         <div class="md">${esc(p.model ?? '')}${p.portraitCredit && pose ? ` · ${esc(p.portraitCredit)}` : ''}</div>
       </div>
       <div class="side-text">
-        <div class="title">${byHuman ? `${esc(p.name)} 被你拿下了♡` : `${esc(p.name)} 出局了…`}</div>
-        <div class="subtitle">${byHuman ? '' : `被 <b style="color:${winner?.color ?? '#fff'}">${winnerName}</b> 淘汰 · `}第 ${k.handNo} 手筹码归零 · 第 ${k.place} / ${k.players} 名 · 场上还剩 ${alive} 人</div>
+        <div class="title">${byYou ? `${esc(p.name)} 被你拿下了♡` : `${esc(p.name)} 出局了…`}</div>
+        <div class="subtitle">${byYou ? '' : `被 <b style="color:${winner?.color ?? '#fff'}">${winnerName}</b> 淘汰 · `}第 ${k.handNo} 手筹码归零 · 第 ${k.place} / ${k.players} 名 · 场上还剩 ${alive} 人</div>
         <div class="bubble-big">${k.line ? `「${esc(k.line)}」` : '<span class="thinking-dots">她正红着脸组织语言</span>'}</div>
         ${k.reward ? `<div class="penalty"><span>🎁 胜者奖励</span>${esc(k.reward)}</div>` : ''}
         ${
@@ -407,7 +437,7 @@ function renderKnockout(s) {
         }
         <div class="actions">
           <button class="ghost" id="overClose">看看牌桌</button>
-          <button class="pink" id="overNext">💗 继续下一手</button>
+          ${s.isHost ? '<button class="pink" id="overNext">💗 继续下一手</button>' : ''}
         </div>
       </div>
     </div>`;
@@ -422,35 +452,42 @@ function renderKnockout(s) {
       overDismissed = key;
       renderOver(S);
     };
-    $('overNext').onclick = () => {
-      overDismissed = key;
-      renderOver(S);
-      post('/api/next');
-    };
+    if ($('overNext'))
+      $('overNext').onclick = () => {
+        overDismissed = key;
+        renderOver(S);
+        post('/api/next');
+      };
   }
 }
 
 function renderOver(s) {
   if (s.status === 'handOver' && s.knockout) return renderKnockout(s);
   const el = $('over');
-  const g = s.gameOver;
-  const key = g ? `${s.gameId}-${g.handNo}` : null;
-  if (!g || s.status !== 'gameOver' || overDismissed === key) {
+  // A personal defeat (you are out while other people play on) uses the same screen.
+  const personal = s.status !== 'gameOver' && s.myOut ? s.myOut : null;
+  const g = personal ?? s.gameOver;
+  const key = g ? `${personal ? 'out-' : ''}${s.gameId}-${g.handNo}` : null;
+  if (!g || (!personal && s.status !== 'gameOver') || overDismissed === key) {
     el.className = 'over hidden';
     el.innerHTML = '';
     overShownKey = null;
     return;
   }
-  const rival = s.players[g.rival];
+  const meP = s.you >= 0 ? s.players[s.you] : null;
   const defeat = g.type === 'defeat';
-  const champ = g.type === 'champion';
-  const canSpectate = defeat && s.players.filter((p) => p.stack > 0).length >= 2;
+  // Someone else (an AI or another person) won the table.
+  const champ = g.type === 'champion' || (g.type === 'victory' && g.subject !== s.you);
+  const rival = g.type === 'victory' && champ ? s.players[g.subject] : s.players[g.rival];
+  const place = meP?.place ?? g.place;
+  const stats = meP ? { handsPlayed: meP.handsPlayed, handsWon: meP.handsWon, peakStack: meP.peakStack ?? g.peakStack } : g;
+  const canSpectate = !personal && s.isHost && defeat && s.players.filter((p) => p.stack > 0).length >= 2;
   const spectateBtn = canSpectate ? '<button class="ghost" id="overSpectate">👀 继续观战（AI 血战到底）</button>' : '';
   const cards = (cs) => (cs ?? []).map((c) => cardHtml(c, 'small')).join('');
   const standings = s.players
     .slice()
     .sort((a, b) => (a.place ?? 0) - (b.place ?? 0) || b.stack - a.stack)
-    .map((p) => `<span class="${p.kind === 'human' ? 'me' : ''}">${p.place ? `#${p.place}` : '存活'} ${p.kind === 'human' ? '你' : esc(p.name)}</span>`)
+    .map((p) => `<span class="${isMe(p) ? 'me' : ''}">${p.place ? `#${p.place}` : '存活'} ${esc(nameOf(p))}</span>`)
     .join('');
   const quote = `<div class="quote"><span class="who">${esc(rival?.name ?? '')} · ${esc(rival?.model ?? '')}</span>${g.taunt ? esc(g.taunt) : '<span class="thinking-dots">正在组织语言</span>'}</div>`;
   const flirty = g.style === 'flirty';
@@ -470,20 +507,20 @@ function renderOver(s) {
       </div>
       <div class="side-text">
         <div class="title">${champ ? `${esc(rival?.name ?? '')} 夺冠！` : defeat ? '你输光了哦～' : '…这次算你赢'}</div>
-        <div class="subtitle">${champ ? `她把所有对手都送出了牌桌 · 共 ${g.handNo} 手 · 你最终第 ${g.place} / ${g.players} 名` : defeat ? `全部筹码都被 <b style="color:${rival?.color ?? '#fff'}">${esc(rival?.name ?? '对手')}</b> 收下了 · 第 ${g.place} / ${g.players} 名` : `最后一个被你淘汰的是 <b style="color:${rival?.color ?? '#fff'}">${esc(rival?.name ?? '')}</b> · 第 1 名`}</div>
+        <div class="subtitle">${champ ? `把所有对手都送出了牌桌 · 共 ${g.handNo} 手${place ? ` · 你最终第 ${place} / ${g.players} 名` : ''}` : defeat ? `全部筹码都被 <b style="color:${rival?.color ?? '#fff'}">${esc(rival?.name ?? '对手')}</b> 收下了 · 第 ${place} / ${g.players} 名` : `最后一个被你淘汰的是 <b style="color:${rival?.color ?? '#fff'}">${esc(rival?.name ?? '')}</b> · 第 1 名`}</div>
         <div class="bubble-big">${g.taunt ? `「${esc(g.taunt)}」` : '<span class="thinking-dots">她/他正凑过来</span>'}</div>
         ${g.penalty ? `<div class="penalty"><span>${champ ? '🎀 给观战者的惩罚' : defeat ? '🎀 惩罚游戏' : '🎁 胜者奖励'}</span>${esc(g.penalty)}</div>` : ''}
         ${
-          defeat && g.rivalHole
+          defeat && g.rivalHole && g.subject === s.you
             ? `<div class="showdown mini"><div class="cards">${cards(g.myHole)}</div><span class="vs">vs</span><div class="cards">${cards(g.rivalHole)}</div><span class="vs">·</span><div class="cards">${cards(g.board)}</div></div>`
             : ''
         }
-        <div class="mini-stats">坚持 <b>${g.handsPlayed}</b> 手 · 赢下 <b>${g.handsWon}</b> 手 · 最高筹码 <b>${fmt(g.peakStack)}</b></div>
+        ${meP ? `<div class="mini-stats">坚持 <b>${stats.handsPlayed}</b> 手 · 赢下 <b>${stats.handsWon}</b> 手 · 最高筹码 <b>${fmt(stats.peakStack ?? 0)}</b></div>` : ''}
         <div class="standings">${standings}</div>
         <div class="actions">
-          <button class="ghost" id="overClose">看看牌桌</button>
+          <button class="ghost" id="overClose">${personal ? '继续观看牌局' : '看看牌桌'}</button>
           ${spectateBtn}
-          <button class="pink" id="overAgain">${defeat ? '💗 乖乖认输，再来一局' : '💗 再来一局'}</button>
+          ${s.isHost && !personal ? `<button class="pink" id="overAgain">${defeat ? '💗 乖乖认输，再来一局' : '💗 再来一局'}</button>` : ''}
         </div>
       </div>
     </div>`;
@@ -493,11 +530,11 @@ function renderOver(s) {
     ${defeat ? '<div class="crack"></div>' : ''}
     <div class="box">
       <div class="title">${champ ? 'CHAMPION' : defeat ? 'GAME OVER' : 'VICTORY'}</div>
-      <div class="subtitle">${champ ? `${esc(rival?.name ?? '')} 赢下了整张桌子` : defeat ? `你被 <span style="color:${rival?.color ?? '#fff'}">${esc(rival?.name ?? '对手')}</span> 送出了牌桌` : `你把 ${s.players.length - 1} 个 AI 全部送回了机房`}</div>
-      <div class="place">${g.place}<small> / ${g.players} 名</small></div>
+      <div class="subtitle">${champ ? `${esc(rival?.name ?? '')} 赢下了整张桌子` : defeat ? `你被 <span style="color:${rival?.color ?? '#fff'}">${esc(rival?.name ?? '对手')}</span> 送出了牌桌` : `你把 ${s.players.length - 1} 个对手全部送出了牌桌`}</div>
+      <div class="place">${place ?? '-'}<small> / ${g.players} 名</small></div>
       <div class="rival">${rival ? faceHtml(rival, 'face') : ''}${quote}</div>
       ${
-        defeat && g.rivalHole
+        defeat && g.rivalHole && g.subject === s.you
           ? `<div class="showdown">
         <div class="side"><div class="cards">${cards(g.myHole)}</div>你 · ${esc(g.myHand ?? '')}</div>
         <div class="vs">VS</div>
@@ -507,15 +544,15 @@ function renderOver(s) {
           : ''
       }
       <div class="stats">
-        <div><b>${g.handsPlayed}</b><span>坚持手数</span></div>
-        <div><b>${g.handsWon}</b><span>赢下手数</span></div>
-        <div><b>${fmt(g.peakStack)}</b><span>最高筹码</span></div>
+        <div><b>${stats.handsPlayed ?? '-'}</b><span>坚持手数</span></div>
+        <div><b>${stats.handsWon ?? '-'}</b><span>赢下手数</span></div>
+        <div><b>${fmt(stats.peakStack ?? 0)}</b><span>最高筹码</span></div>
       </div>
       <div class="standings">${standings}</div>
       <div class="actions">
-        <button class="ghost" id="overClose">看看牌桌</button>
+        <button class="ghost" id="overClose">${personal ? '继续观看牌局' : '看看牌桌'}</button>
         ${spectateBtn}
-        <button class="${defeat ? 'danger' : 'gold'}" id="overAgain">🔄 ${defeat ? '不服，再来' : '再来一局'}</button>
+        ${s.isHost && !personal ? `<button class="${defeat ? 'danger' : 'gold'}" id="overAgain">🔄 ${defeat ? '不服，再来' : '再来一局'}</button>` : ''}
       </div>
     </div>`;
   if (overShownKey !== key || el.dataset.taunt !== String(g.taunt)) {
@@ -528,7 +565,7 @@ function renderOver(s) {
       overDismissed = key;
       renderOver(S);
     };
-    $('overAgain').onclick = newGameAndDeal;
+    if ($('overAgain')) $('overAgain').onclick = newGameAndDeal;
     if ($('overSpectate')) {
       $('overSpectate').onclick = () => {
         overDismissed = key;
@@ -573,6 +610,72 @@ $('bgmBtn').onclick = (e) => {
 $('volume').value = String(audio.volume);
 $('volume').oninput = (e) => audio.setVolume(Number(e.target.value));
 updateBgmButton();
+
+// ---------------------------------------------------------------- LAN: host panel, join dialog
+let joinAsked = false;
+function renderLan(s) {
+  const lan = s.lan ?? {};
+  for (const id of ['settingsBtn', 'newGameBtn', 'slackBtn']) $(id).classList.toggle('hidden', !s.isHost);
+  const chip = $('lanChip');
+  if (s.isHost) {
+    chip.classList.toggle('hidden', !lan.enabled);
+    chip.textContent = `📶 局域网 · ${lan.players?.length ?? 0} 人`;
+  } else {
+    chip.classList.remove('hidden');
+    chip.textContent = lan.joined ? `🙋 ${lan.myName ?? ''}` : '🙋 加入牌桌';
+    if (!lan.joined && !joinAsked && lan.enabled) {
+      joinAsked = true;
+      openJoin(false);
+    }
+  }
+  if (!$('lanModal').classList.contains('hidden') && s.isHost) renderHostLan(s);
+}
+
+function renderHostLan(s) {
+  const lan = s.lan ?? {};
+  $('lanTitle').textContent = '📶 局域网模式';
+  $('lanBody').innerHTML = `<p class="snote">同一个 Wi-Fi / 局域网里的朋友用浏览器打开下面任一地址，起个名字就能加入。新加入的人在<b>下一局</b>入座（还没开打时会立刻入座）。第一次开启时 Windows 防火墙可能会弹窗，请允许 Node.js 访问专用网络。</p>
+    <div class="lanurls">${(lan.urls ?? []).map((u) => `<code>${esc(u)}</code>`).join('') || '<span class="muted">没有找到局域网地址</span>'}</div>
+    <h4>玩家（${lan.players?.length ?? 0}）</h4>
+    <div class="lanplayers">${(lan.players ?? []).map((p) => `<div>${p.seated ? '🪑' : '⏳'} ${esc(p.name)} <span class="muted">${p.seated ? '已入座' : '下一局入座'}</span> <button type="button" data-kick="${esc(p.id)}">踢出</button></div>`).join('') || '<span class="muted">还没有人加入</span>'}</div>
+    <p class="snote">房间密码、开关局域网模式在「⚙ 设置 → 牌局」里。</p>`;
+  $('lanBody').querySelectorAll('[data-kick]').forEach((b) => (b.onclick = () => post('/api/lan/kick', { id: b.dataset.kick })));
+}
+
+function openJoin(force) {
+  const lan = S?.lan ?? {};
+  $('lanModal').classList.remove('hidden');
+  if (S?.isHost) return renderHostLan(S);
+  $('lanTitle').textContent = '🙋 加入牌桌';
+  if (lan.joined) {
+    $('lanBody').innerHTML = `<p>你是 <b>${esc(lan.myName ?? '')}</b>。</p><div class="sbtns"><input id="joinName" placeholder="改个名字" maxlength="12"><button type="button" id="renameBtn">改名</button><button type="button" class="danger" id="leaveBtn2">离开牌桌</button></div>`;
+    $('renameBtn').onclick = async () => {
+      const r = await post('/api/join', { name: $('joinName').value });
+      if (r.ok) $('lanModal').classList.add('hidden');
+    };
+    $('leaveBtn2').onclick = async () => {
+      await post('/api/leave');
+      $('lanModal').classList.add('hidden');
+    };
+    return;
+  }
+  if (!lan.enabled && !force) return $('lanModal').classList.add('hidden');
+  $('lanBody').innerHTML = `<p class="snote">起个名字加入牌桌，和桌上的 AI 以及其他朋友一起打。</p>
+    <div class="sgrid">
+      <label class="sf">你的名字<input id="joinName" maxlength="12" placeholder="比如：小明" value="${esc(localStorage.getItem('holdem.name') ?? '')}"></label>
+      ${lan.needPassword ? '<label class="sf">房间密码<input id="joinPass" type="password"></label>' : ''}
+    </div>
+    <div class="sbtns" style="margin-top:12px"><button type="button" class="primary" id="joinGo">加入</button><span class="muted">也可以先关闭，只旁观。</span></div>`;
+  $('joinGo').onclick = async () => {
+    const name = $('joinName').value.trim();
+    localStorage.setItem('holdem.name', name);
+    const r = await post('/api/join', { name, password: $('joinPass')?.value });
+    if (r.ok) $('lanModal').classList.add('hidden');
+    else $('lanStatus').textContent = r.error ?? '加入失败';
+  };
+}
+$('lanChip').onclick = () => openJoin(true);
+$('lanClose').onclick = () => $('lanModal').classList.add('hidden');
 
 initSettings();
 
@@ -620,7 +723,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 function connect() {
-  const es = new EventSource('/events');
+  const es = new EventSource(`/events?player=${TOKEN}`);
   es.onmessage = (e) => render(JSON.parse(e.data));
   es.onerror = () => {
     es.close();
@@ -628,7 +731,7 @@ function connect() {
     setTimeout(connect, 1500);
   };
 }
-fetch('/state')
+fetch(`/state?player=${TOKEN}`)
   .then((r) => r.json())
   .then(render)
   .catch(() => {});

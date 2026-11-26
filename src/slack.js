@@ -159,8 +159,8 @@ export class SlackMirror {
       const via = g.lastHumanSource === 'slack' ? '' : '（在网页上）';
       this.closeTurn(`✅ 你${via}：${describeAction(entry)}`);
     });
-    g.on('humanTurn', ({ legal, turnId }) => {
-      if (!this.thread) return;
+    g.on('humanTurn', ({ legal, turnId, player }) => {
+      if (!this.thread || player.seat !== 0) return;
       this.flushHandUpdate();
       const { text, blocks } = this.turnMessage(legal, turnId);
       const msg = { ts: null, turnId, legal };
@@ -278,7 +278,7 @@ export class SlackMirror {
         lines.push(`*— ${STREET_NAMES[street]} —*`);
       }
       const p = s.players[e.seat];
-      const who = p.kind === 'human' ? '*你*' : `*${p.name}*`;
+      const who = p.seat === 0 ? '*你*' : `*${p.name}*`;
       const flag = e.fallback ? ' ⚙️' : '';
       if (e.action === 'chat') {
         lines.push(`• ${who} 💬 _「${e.say}」_`);
@@ -293,12 +293,12 @@ export class SlackMirror {
         const names = pot.winners.map((w) => (w === 0 ? '*你*' : `*${s.players[w].name}*`)).join('、');
         lines.push(`🏆 ${names} 赢得 ${fmt(pot.amount)}${pot.hand ? `（${pot.hand}）` : ''}`);
       }
-      for (const r of s.result.reveals) lines.push(`   ${s.players[r.seat].kind === 'human' ? '你' : s.players[r.seat].name}：${cards(r.hole)}  ${r.hand}`);
+      for (const r of s.result.reveals) lines.push(`   ${r.seat === 0 ? '你' : s.players[r.seat].name}：${cards(r.hole)}  ${r.hand}`);
       const net = s.result.net[0];
       if (net !== undefined) lines.push(`你这手 ${net >= 0 ? '+' : ''}${fmt(net)}，现有筹码 ${fmt(me.stack)}`);
       for (const e of s.eliminations ?? []) {
         const killer = s.players[e.by];
-        lines.push(`💀 *${e.seat === 0 ? '你' : e.name}* 筹码归零，出局（第 ${e.place} 名）${killer ? `，淘汰者：${killer.kind === 'human' ? '你' : killer.name}` : ''}`);
+        lines.push(`💀 *${e.seat === 0 ? '你' : e.name}* 筹码归零，出局（第 ${e.place} 名）${killer ? `，淘汰者：${killer.seat === 0 ? '你' : killer.name}` : ''}`);
       }
       const alive = s.players.filter((p) => p.stack > 0).length;
       if (s.eliminationMode && s.status !== 'gameOver') lines.push(`_场上还剩 ${alive} 人_`);
@@ -381,7 +381,7 @@ export class SlackMirror {
     return s.players
       .map((p) => {
         const where = p.seat === 0 ? '' : p.seat === 1 ? '（你的左手边，在你之后行动）' : p.seat === n - 1 ? '（你的右手边）' : '';
-        return `${p.seat === 0 ? '🙂' : (p.avatar ?? '🤖')} 座位${p.seat} ${p.kind === 'human' ? '*你*' : `*${p.name}*  \`${p.model}\``}${where}`;
+        return `${p.seat === 0 ? '🙂' : (p.avatar ?? '🤖')} 座位${p.seat} ${p.seat === 0 ? '*你*' : p.kind === 'human' ? `*${p.name}*（真人）` : `*${p.name}*  \`${p.model}\``}${where}`;
       })
       .join('\n');
   }
@@ -423,7 +423,7 @@ export class SlackMirror {
     const standings = s.players
       .slice()
       .sort((a, b) => (a.place ?? 0) - (b.place ?? 0) || b.stack - a.stack)
-      .map((p) => `${p.place ? `第 ${p.place} 名` : '存活'}  ${p.kind === 'human' ? '*你*' : p.name}${p.place ? '' : `  ${fmt(p.stack)}`}`)
+      .map((p) => `${p.place ? `第 ${p.place} 名` : '存活'}  ${p.seat === 0 ? '*你*' : p.name}${p.place ? '' : `  ${fmt(p.stack)}`}`)
       .join('\n');
     const flirty = over.style === 'flirty';
     const head =
@@ -487,7 +487,7 @@ export class SlackMirror {
       .slice()
       .sort((a, b) => b.net - a.net)
       .map((p, i) => {
-        const who = p.kind === 'human' ? '*你*' : `*${p.name}*（${p.model}）`;
+        const who = p.seat === 0 ? '*你*' : p.kind === 'human' ? `*${p.name}*（真人）` : `*${p.name}*（${p.model}）`;
         const rb = p.buyIns > 1 ? `，买入 ${p.buyIns} 次` : '';
         return `${i + 1}. ${who}  筹码 ${fmt(p.stack)}  净 ${p.net >= 0 ? '+' : ''}${fmt(p.net)}  胜 ${p.handsWon}/${p.handsPlayed}${rb}`;
       });

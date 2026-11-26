@@ -38,7 +38,7 @@ function readRaw(req, limit) {
   });
 }
 
-export function createSettingsApi({ root, publicDir, config, game, log, savePath }) {
+export function createSettingsApi({ root, publicDir, config, game, log, savePath, onSaved }) {
   const target = savePath ?? path.join(root, 'config.json');
   const jobs = new Map();
   let jobSeq = 0;
@@ -97,6 +97,7 @@ export function createSettingsApi({ root, publicDir, config, game, log, savePath
     game.reloadTuning();
     game.changed();
     log(`[settings] saved config.json (${merged.ai.length} AI${needsNewGame ? ', new game needed' : ''})`);
+    onSaved?.();
     return { ok: true, needsNewGame };
   }
 

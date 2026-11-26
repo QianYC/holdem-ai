@@ -73,6 +73,13 @@ function gameTab() {
     ${field('轮到我时生成快速发言', 'quickReplies', { type: 'bool' })}
     ${field('明牌模式（显示所有 AI 底牌）', 'revealAllCards', { type: 'bool' })}
   </div>
+  <h4 class="shead">📶 局域网模式</h4>
+  <div class="sgrid">
+    ${field('开启局域网模式（同一网络的朋友用浏览器加入）', 'lan.enabled', { type: 'bool' })}
+    ${field('房间密码（可选）', 'lan.password', { type: 'password', attrs: 'placeholder="留空 = 不需要密码"' })}
+    ${field('朋友每次行动的时限（毫秒，超时自动过牌/弃牌，0 = 不限）', 'lan.turnTimeoutMs', { type: 'number', attrs: 'placeholder="90000"' })}
+  </div>
+  <p class="snote">开启后服务器会监听局域网地址，朋友打开页面右上角「📶 局域网」里显示的地址即可加入；保存后立即生效。只有房主（在这台电脑上打开页面的人）能改设置、发牌、开新局。</p>
   <p class="snote">盲注按「第一手的小盲/大盲 → 盲注级别」逐级上升（锦标赛结构），当前级别显示在页面顶部。<br>起始筹码、盲注、你的名字以及 AI 名单 / 模型的改动在<b>新的一局</b>生效；其余设置从下一手起生效。</p>`;
 }
 
