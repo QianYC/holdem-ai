@@ -163,6 +163,25 @@
         "win": "She rests her big axe on her shoulder and laughs triumphantly with a fang showing, the other hand pointing teasingly at the viewer, poker chips raining around her.",
         "lose": "She sits on the ground hugging her knees beside her broken axe, twin tails messy, gown hem dusty, pouting angrily with teary eyes as if shouting \"that was not fair!\""
       }
+    },
+    {
+      "key": "astra",
+      "name": "Astra",
+      "model": "gpt-6.2-astra",
+      "avatar": "🌌",
+      "color": "#7b8cff",
+      "title": "星辉龙娘",
+      "persona": "成年女性，GPT 龙娘家族的小妹「星辉龙娘」：深蓝渐变到紫色的长发里缀着星屑，水晶般的龙角，披着星图短斗篷，随身带一只黄铜星盘。说话慢悠悠、带点神秘，爱用星象打比方（「今晚的星位不适合跟注」），看着佛系其实概率算得比谁都细，偶尔冒一句冷幽默。",
+      "portraitPos": "50% 6%",
+      "faceFocus": "50% 12%",
+      "portraitCredit": "立绘：AI 生成（参考 GPT 龙娘画风）",
+      "art": {
+        "reference": "public/characters/gptsol/portrait.webp",
+        "prompt": "Full-body anime character illustration in a refined gacha-game standing-portrait style, matching the art style of the reference image (a dragon girl from the same family), but a NEW character: 'Astra', an adult woman around 24 with adult proportions. Long flowing hair in a gradient from deep navy to violet, sprinkled with tiny glowing star specks; translucent crystal dragon horns; pale-blue eyes with star-shaped highlights; a slim dragon tail with starry scales; an elegant midnight-blue gown with silver constellation embroidery and a short star-map cape; holding a brass astrolabe. Calm, mysterious, a faint knowing smile. Fully clothed, modest, non-sexual. Plain white background, clean lineart, soft cel shading, vertical 2:3, no text.",
+        "look": "Navy-to-violet gradient hair with star specks, translucent crystal dragon horns, starry dragon tail, midnight-blue gown with silver constellation embroidery and a short star-map cape.",
+        "win": "She raises her glowing brass astrolabe while constellations light up around her like a crown, a calm triumphant smile, a neat tower of poker chips floating in starlight beside her.",
+        "lose": "She sits on the floor with her star-map cape tangled, the astrolabe rolled away, a few dim falling stars around her, cheeks flushed with a sulky pout, looking away."
+      }
     }
   ],
   "slack": {

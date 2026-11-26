@@ -200,7 +200,7 @@ export class Game extends EventEmitter {
     try {
       const snap = JSON.parse(fs.readFileSync(file, 'utf8'));
       const byId = new Map(this.table.players.map((p) => [p.id, p]));
-      if (snap.players?.length !== byId.size || snap.players.some((p) => !byId.has(p.id) || byId.get(p.id).model !== p.model) || snap.players[0].id !== 'human') return;
+      if (snap.players?.length !== byId.size || snap.players.some((p) => !byId.has(p.id)) || snap.players[0].id !== 'human') return;
       if (snap.players.some((p, i) => p.id !== this.table.players[i].id)) this.newGame({ order: snap.players.slice(1).map((p) => p.id) });
       const t = this.table;
       snap.players.forEach((p, i) =>
@@ -446,8 +446,16 @@ export class Game extends EventEmitter {
       for (const key of ['minActionDelayMs', 'autoNextHandMs', 'aiAutoRebuy', 'eliminateBusted', 'defeatStyle', 'randomSeats', 'handsPerLevel', 'blindLevels', 'quickReplies', 'quickReplyModel', 'revealAllCards', 'spectateDelayMs', 'imageModel']) if (key in fresh) this.config[key] = fresh[key];
       (fresh.ai ?? []).forEach((a, i) => {
         const p = this.table.players.find((x) => x.id === `ai${i + 1}`);
-        if (!p || p.model !== a.model) return;
-        // Everything except the model (and the seat identity) can change between hands.
+        if (!p) return;
+        // A different model in this slot: between hands the newcomer takes over the seat and its chips.
+        const swap = p.model !== a.model;
+        if (swap && this.running) return;
+        if (swap) {
+          this.log(`[game] seat ${p.seat}: ${p.name} (${p.model}) replaced by ${a.name} (${a.model})`);
+          this.emit('seatSwap', { seat: p.seat, from: { name: p.name, model: p.model }, to: { name: a.name, model: a.model } });
+          p.model = a.model;
+        }
+        // Everything except the seat identity can change between hands.
         for (const key of new Set([...Object.keys(a), ...ART_KEYS, 'reasoning', 'timeoutMs', 'maxOutputTokens'])) {
           if (key === 'model' || key === 'id') continue;
           if (key in a) p[key] = a[key];

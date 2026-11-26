@@ -175,6 +175,9 @@ export class SlackMirror {
       const { text, blocks } = this.turnMessage(msg.legal, turnId, items);
       this.enqueue(() => msg.ts && this.turnMsg === msg && this.update(msg.ts, text, blocks));
     });
+    g.on('seatSwap', ({ from, to }) => {
+      if (this.thread) this.reply(`🔄 *${from.name}*（${from.model}）离席，*${to.name}*（${to.model}）接手了她的座位和筹码。`);
+    });
     g.on('handEnd', () => {
       if (!this.thread) return;
       this.flushHandUpdate();

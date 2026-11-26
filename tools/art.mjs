@@ -43,7 +43,8 @@ async function portraits() {
       console.log(`portrait ${a.key}: downloaded`);
     } else if (art.prompt) {
       let ref;
-      if (art.reference) {
+      if (art.reference && !/^https?:/i.test(art.reference)) ref = path.resolve(ROOT, art.reference);
+      else if (art.reference) {
         ref = path.join(dir, `reference${path.extname(new URL(art.reference).pathname).split('-')[0] || '.png'}`);
         if (!fs.existsSync(ref)) await download(art.reference, ref);
       }

@@ -11,7 +11,8 @@ const STICKER_RE = /^[^\\/:*?"<>|.\s][^\\/:*?"<>|]{0,39}$/;
 const MAX_AI = 9;
 
 // Changes to these need a new game (seats are built from them).
-const structural = (c) => JSON.stringify([c.startingStack, c.smallBlind, c.bigBlind, c.humanName, (c.ai ?? []).map((a) => [a.key, a.model])]);
+// (A different model in an existing slot just takes over that seat at the next hand.)
+const structural = (c) => JSON.stringify([c.startingStack, c.smallBlind, c.bigBlind, c.humanName, (c.ai ?? []).length]);
 
 function slug(s, i) {
   const k = String(s ?? '')
