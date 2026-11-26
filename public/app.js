@@ -6,6 +6,8 @@ const fmt = (n) => Number(n).toLocaleString('en-US');
 const SUIT = { s: '♠', h: '♥', d: '♦', c: '♣' };
 const STREET = { preflop: '翻牌前', flop: '翻牌', turn: '转牌', river: '河牌' };
 let S = null;
+const BUBBLE_MS = 3600; // 3 s visible + 0.6 s fade (matches the CSS animation)
+let clockSkew = 0;
 let raiseValue = 0;
 let raiseTurn = null;
 
@@ -86,6 +88,7 @@ function seatXY(i, n, rx = 45, ry = 39) {
 }
 
 function render(s) {
+  if (s.serverNow) clockSkew = s.serverNow - Date.now();
   playCues(S, s);
   S = s;
   const subtitle = `你 vs ${s.players.length - 1} 个 AI`;
@@ -121,11 +124,14 @@ function render(s) {
     if (dead) status = `<span class="rip">💀 出局 · 第 ${p.place} 名</span>`;
     const la = p.lastAction;
     const lc = p.lastChat;
-    const actTalk = la && s.status === 'playing' && la.street === s.street && (la.say || la.emote) ? la : null;
-    const talk = lc && s.status === 'playing' && (!actTalk || (lc.idx ?? 0) > (actTalk.idx ?? 0)) ? lc : actTalk;
-    const bubble = talk
-      ? `<div class="bubble${talk.emote ? ' has-sticker' : ''}${talk === lc ? ' chat' : ''}">${talk.emote ? stickerHtml(p, talk.emote, 'sticker') : ''}${talk.say ? `<span>${esc(talk.say)}</span>` : ''}</div>`
-      : '';
+    const actTalk = la && la.street === s.street && (la.say || la.emote) ? la : null;
+    const talk = lc && (!actTalk || (lc.idx ?? 0) > (actTalk.idx ?? 0)) ? lc : actTalk;
+    // Speech bubbles sit beside the seat (never over the cards) and fade out after 3 s.
+    const age = talk?.at ? Date.now() + clockSkew - talk.at : 0;
+    const bubble =
+      talk && age < BUBBLE_MS
+        ? `<div class="bubble ${x > 55 ? 'left' : 'right'}${talk.emote ? ' has-sticker' : ''}${talk === lc ? ' chat' : ''}" style="animation-delay:-${Math.max(0, Math.round(age))}ms">${talk.emote ? stickerHtml(p, talk.emote, 'sticker') : ''}${talk.say ? `<span>${esc(talk.say)}</span>` : ''}</div>`
+        : '';
     html += `<div class="${cls}" style="left:${x}%;top:${y}%">
       <div class="cards">${cards}</div>
       <div class="plate">${bubble}

@@ -73,7 +73,7 @@ export class Game extends EventEmitter {
     this.newGame();
     this.restore();
     this.ready = true;
-    if (this.spectating) setTimeout(() => this.scheduleAutoNext(), 1000);
+    if (this.spectating || this.config.autoNextHandMs) setTimeout(() => this.scheduleAutoNext(), 1000);
   }
 
   snapshotPath() {
@@ -705,6 +705,7 @@ export class Game extends EventEmitter {
       status: this.status,
       handNo: t.handNo,
       smallBlind: t.smallBlind,
+      serverNow: Date.now(),
       blindLevel: this.blinds?.level ?? 1,
       autoNextHandMs: this.config.autoNextHandMs ?? 0,
       autoNextAt: this.autoNextAt ?? null,

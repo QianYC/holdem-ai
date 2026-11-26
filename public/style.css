@@ -539,3 +539,17 @@ aside .panel:first-child { flex: 1 1 auto; min-height: 160px; display: flex; fle
 .over.flirty .title { font-size: clamp(34px, min(6vw, 8vh), 76px); }
 .autonext { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; white-space: nowrap; }
 #autoLeft { color: var(--gold); font-weight: 700; }
+
+/* ---------- speech bubbles beside the seat, fading out after 3 s ---------- */
+.bubble { bottom: auto; top: 50%; left: calc(100% + 12px); right: auto; margin: 0; transform: translateY(-50%); max-width: 210px; animation: bubbleLife 3.6s ease-out forwards; }
+.bubble.left { left: auto; right: calc(100% + 12px); }
+.bubble::after { top: 50%; left: auto; right: 100%; margin: -6px 0 0; border: 6px solid transparent; border-right-color: #fff; border-top-color: transparent; }
+.bubble.left::after { right: auto; left: 100%; border-right-color: transparent; border-left-color: #fff; }
+.bubble.chat::after { border-top-color: transparent; border-right-color: #dbeafe; }
+.bubble.chat.left::after { border-right-color: transparent; border-left-color: #dbeafe; }
+@keyframes bubbleLife {
+  0% { opacity: 0; transform: translateY(-50%) scale(.7); }
+  6% { opacity: 1; transform: translateY(-50%) scale(1); }
+  83% { opacity: 1; transform: translateY(-50%) scale(1); }
+  100% { opacity: 0; transform: translateY(-50%) scale(.96); }
+}

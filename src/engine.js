@@ -241,7 +241,7 @@ export class Table extends EventEmitter {
   chat(p, text) {
     const h = this.hand;
     if (!h) return null;
-    const entry = { street: h.street, seat: p.seat, name: p.name, action: 'chat', amount: 0, say: String(text).slice(0, 80), pot: this.pot(), stack: p.stack, idx: h.log.length };
+    const entry = { street: h.street, seat: p.seat, name: p.name, action: 'chat', amount: 0, say: String(text).slice(0, 80), pot: this.pot(), stack: p.stack, idx: h.log.length, at: Date.now() };
     p.lastChat = entry;
     h.log.push(entry);
     this.emit('action', { hand: h, entry, player: p });
@@ -252,6 +252,7 @@ export class Table extends EventEmitter {
     const h = this.hand;
     const entry = {
       idx: h.log.length,
+      at: Date.now(),
       street: h.street,
       seat: p.seat,
       name: p.name,
