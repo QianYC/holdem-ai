@@ -51,6 +51,33 @@ const field = (label, pathStr, { type = 'text', hint = '', attrs = '', list = ''
 const select = (label, pathStr, options, hint = '') =>
   `<label class="sf">${label}<select data-bind="${pathStr}">${options.map(([v, t]) => `<option value="${esc(v)}" ${String(get(draft, pathStr) ?? '') === v ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>${hint ? `<small>${hint}</small>` : ''}</label>`;
 
+// Model picker: every model the endpoint lists (GET {baseUrl}/models), grouped by family, plus a custom id.
+// (A text box with a <datalist> only suggests entries matching what is already typed, so it looked incomplete.)
+const CUSTOM = '__custom__';
+const isImageModel = (m) => /image|dall-?e|flux|diffusion/i.test(m);
+const isChatModel = (m) => !/embedding|whisper|tts|moderation/i.test(m) && !isImageModel(m);
+function family(m) {
+  const id = m.toLowerCase().replace(/^.*\//, '');
+  const head = id.split(/[-_.\d]/)[0];
+  return head || '其他';
+}
+function modelSelect(label, pathStr, { kind = 'chat' } = {}) {
+  const value = String(get(draft, pathStr) ?? '');
+  const list = models.filter(kind === 'image' ? isImageModel : isChatModel);
+  const all = value && !list.includes(value) ? [value, ...list] : list;
+  const groups = new Map();
+  for (const m of all) {
+    const f = family(m);
+    if (!groups.has(f)) groups.set(f, []);
+    groups.get(f).push(m);
+  }
+  const opts = [...groups]
+    .map(([f, ms]) => `<optgroup label="${esc(f)}">${ms.map((m) => `<option value="${esc(m)}" ${m === value ? 'selected' : ''}>${esc(m)}</option>`).join('')}</optgroup>`)
+    .join('');
+  const hint = models.length ? '' : '<small>还没读到模型列表：到「模型接口」页点「测试连接」</small>';
+  return `<label class="sf">${label}<select data-model="${pathStr}">${value ? '' : '<option value="" selected>（请选择）</option>'}${opts}<option value="${CUSTOM}">✎ 自定义模型 id…</option></select>${hint}</label>`;
+}
+
 // ---------------------------------------------------------------- tabs
 function gameTab() {
   return `<div class="sgrid">
@@ -64,7 +91,7 @@ function gameTab() {
     ${field('AI 最短行动展示（毫秒）', 'minActionDelayMs', { type: 'number' })}
     ${field('自动发下一手（毫秒，0 = 手动）', 'autoNextHandMs', { type: 'number' })}
     ${field('观战每手间隔（毫秒）', 'spectateDelayMs', { type: 'number' })}
-    ${field('快速发言用的模型', 'quickReplyModel', { list: 'modelList' })}
+    ${modelSelect('快速发言用的模型', 'quickReplyModel')}
   </div>
   <div class="schecks">
     ${field('淘汰赛：筹码归零即出局', 'eliminateBusted', { type: 'bool' })}
@@ -104,7 +131,7 @@ function aiCard(a, i) {
     <div class="aihead">
       ${field('', `ai.${i}.avatar`, { attrs: 'class="emo" maxlength="4" title="没有立绘时的头像"' })}
       ${field('名字', `ai.${i}.name`)}
-      ${field('模型', `ai.${i}.model`, { list: 'modelList' })}
+      ${modelSelect('模型', `ai.${i}.model`)}
       ${select('推理', `ai.${i}.reasoning`, [['', '默认'], ['low', 'low'], ['medium', 'medium'], ['high', 'high']])}
       ${field('颜色', `ai.${i}.color`, { type: 'color' })}
       <div class="aibtns">
@@ -183,7 +210,7 @@ function llmTab() {
     ${field('API Key', 'llm.apiKey', { type: 'password', attrs: `placeholder="${hasApiKey ? '已设置，留空不修改' : '留空则用环境变量 LOCAL_API_KEY'}"` })}
     ${field('单次超时（毫秒）', 'llm.timeoutMs', { type: 'number' })}
     ${field('最大输出 token', 'llm.maxOutputTokens', { type: 'number' })}
-    ${field('图像模型（生成立绘 / 表情）', 'imageModel', { list: 'modelList' })}
+    ${modelSelect('图像模型（生成立绘 / 表情）', 'imageModel', { kind: 'image' })}
   </div>
   <div class="sbtns"><button type="button" id="testLlm">测试连接 / 刷新模型列表</button> <span id="llmResult" class="muted">${models.length ? `可用模型 ${models.length} 个` : ''}</span></div>`;
 }
@@ -204,6 +231,19 @@ function render() {
         if (draft.ai[i]._new) draft.ai[i].key = slug(v, i);
       }
       status('有未保存的修改');
+    });
+  });
+  body.querySelectorAll('select[data-model]').forEach((el) => {
+    el.addEventListener('change', () => {
+      let v = el.value;
+      if (v === CUSTOM) {
+        v = prompt('输入模型 id（接口上的名字）', String(get(draft, el.dataset.model) ?? '')) ?? '';
+        v = v.trim();
+        if (!v) return render();
+      }
+      set(draft, el.dataset.model, v);
+      status('有未保存的修改');
+      render();
     });
   });
   $('blindLevelsText')?.addEventListener('input', (e) => {
@@ -297,7 +337,8 @@ function bindActions(body) {
   $('testLlm')?.addEventListener('click', async () => {
     $('llmResult').textContent = '连接中…';
     const r = await loadModels();
-    $('llmResult').textContent = r.ok ? `可用模型 ${models.length} 个（已填入下拉提示）` : `失败：${r.error}`;
+    $('llmResult').textContent = r.ok ? `可用模型 ${models.length} 个（对话模型 ${models.filter(isChatModel).length} 个，图像模型 ${models.filter(isImageModel).length} 个）` : `失败：${r.error}`;
+    if (r.ok) render();
   });
 }
 
