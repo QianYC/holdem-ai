@@ -597,3 +597,13 @@ aside .panel:first-child { flex: 1 1 auto; min-height: 160px; display: flex; fle
 .cast .nm { font-size: clamp(13px, 1.2vw, 18px); }
 @media (max-width: 860px) { .cast-grid { flex-wrap: wrap; } .cast { flex: 0 0 140px; } }
 .log .tools { font-size: 11px; color: #79c0ff; cursor: help; }
+
+/* bigger cast cards: size comes from layoutCast() (--cw) */
+.start-inner { width: 100%; }
+.cast-grid { flex-wrap: wrap; justify-content: center; gap: 18px; width: 100%; margin: 6px auto 0; }
+.cast { flex: 0 0 var(--cw, 200px); width: var(--cw, 200px); max-width: none; }
+.cast .nm { font-size: clamp(14px, calc(var(--cw, 200px) * .1), 26px); }
+.cast .tt { font-size: clamp(11px, calc(var(--cw, 200px) * .065), 16px); }
+.cast .md { font-size: clamp(10px, calc(var(--cw, 200px) * .05), 13px); }
+.cast .ps { font-size: clamp(11px, calc(var(--cw, 200px) * .058), 14px); }
+.cast .art img { image-rendering: auto; }

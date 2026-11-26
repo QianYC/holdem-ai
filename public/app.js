@@ -669,6 +669,7 @@ function renderStart(s) {
     startClosedFor = s.gameId;
     renderStart(S);
   };
+  layoutCast();
   if ($('startGo'))
     $('startGo').onclick = () => {
       close();
@@ -678,6 +679,26 @@ function renderStart(s) {
   if ($('startJoin')) $('startJoin').onclick = () => openJoin(true);
   if ($('startSettings')) $('startSettings').onclick = () => openSettings('ai');
 }
+// Make the cast cards as large as the window allows: try 1–3 rows and keep the biggest card size.
+function layoutCast() {
+  const grid = document.querySelector('#start .cast-grid');
+  if (!grid) return;
+  const n = grid.children.length;
+  const gap = 18;
+  const W = Math.min(window.innerWidth * 0.96, 2400);
+  const H = window.innerHeight - 250;
+  let best = { w: 0, cols: n };
+  for (let rows = 1; rows <= 3; rows++) {
+    const cols = Math.ceil(n / rows);
+    const w = Math.min((W - gap * (cols - 1)) / cols, (H - gap * (rows - 1)) / rows / 1.62, 360);
+    if (w > best.w + 1) best = { w, cols };
+  }
+  const w = Math.max(120, Math.floor(best.w));
+  grid.style.setProperty('--cw', `${w}px`);
+  grid.style.maxWidth = `${best.cols * w + (best.cols - 1) * gap}px`;
+}
+window.addEventListener('resize', layoutCast);
+
 $('lineupBtn').onclick = () => {
   startManual = true;
   startKey = null;
