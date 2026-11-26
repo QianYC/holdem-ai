@@ -6,6 +6,15 @@ const fmt = (n) => Number(n).toLocaleString('en-US');
 const SUIT = { s: '♠', h: '♥', d: '♦', c: '♣' };
 const STREET = { preflop: '翻牌前', flop: '翻牌', turn: '转牌', river: '河牌' };
 let S = null;
+const POSITION_TIPS = {
+  BTN: '庄家位（按钮位）：翻牌后最后一个行动，位置最好',
+  'BTN/SB': '单挑时庄家同时是小盲：翻牌前先行动，翻牌后最后行动',
+  SB: '小盲位：强制下小盲注，翻牌后最先行动',
+  BB: '大盲位：强制下大盲注，翻牌前最后行动',
+  UTG: '枪口位（Under the Gun）：翻牌前第一个行动，位置最差',
+  HJ: '劫持位（Hijack）：庄家前两位',
+  CO: '关煞位（Cutoff）：庄家右手边，位置仅次于庄家',
+};
 const BUBBLE_MS = 3600; // 3 s visible + 0.6 s fade (matches the CSS animation)
 let clockSkew = 0;
 let raiseValue = 0;
@@ -137,7 +146,7 @@ function render(s) {
     html += `<div class="${cls}" style="left:${x}%;top:${y}%">
       <div class="cards">${cards}</div>
       <div class="plate">${bubble}
-        ${p.position ? `<span class="pos">${p.position}</span>` : ''}
+        ${p.position ? `<span class="pos" title="${esc(POSITION_TIPS[p.position.split('+')[0]] ?? POSITION_TIPS[p.position] ?? '')}">${p.position}</span>` : ''}
         <div class="name">${faceHtml(p)}${esc(p.name)}</div>
         ${p.model ? `<div class="model">${esc(p.model)}</div>` : '<div class="model">人类玩家</div>'}
         <div class="stack">${fmt(p.stack)}</div>
