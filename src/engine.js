@@ -265,6 +265,7 @@ export class Table extends EventEmitter {
       stack: p.stack,
       ms: decision.ms,
       fallback: decision.fallback || undefined,
+      tools: decision.tools?.length ? decision.tools : undefined,
     };
     p.lastAction = entry;
     h.log.push(entry);

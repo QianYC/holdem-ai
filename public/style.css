@@ -596,3 +596,4 @@ aside .panel:first-child { flex: 1 1 auto; min-height: 160px; display: flex; fle
 .cast { flex: 1 1 0; min-width: 0; max-width: 200px; width: auto; height: auto; aspect-ratio: 1 / 1.62; }
 .cast .nm { font-size: clamp(13px, 1.2vw, 18px); }
 @media (max-width: 860px) { .cast-grid { flex-wrap: wrap; } .cast { flex: 0 0 140px; } }
+.log .tools { font-size: 11px; color: #79c0ff; cursor: help; }

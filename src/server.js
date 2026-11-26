@@ -47,7 +47,7 @@ const slackCfg = {
 const slack = config.slack?.enabled === false ? null : new SlackMirror(game, slackCfg, { port: PORT, log, serverScript: fileURLToPath(import.meta.url) });
 
 game.on('action', ({ entry, player }) => {
-  if (player.kind === 'ai') log(`[hand ${game.table.handNo}] ${player.name} ${entry.action} ${entry.amount}${entry.fallback ? ' (fallback)' : ''} ${entry.ms ?? ''}ms ${entry.say ?? ''}`);
+  if (player.kind === 'ai') log(`[hand ${game.table.handNo}] ${player.name} ${entry.action} ${entry.amount}${entry.fallback ? ' (fallback)' : ''} ${entry.ms ?? ''}ms${entry.tools ? ` 🔍${entry.tools.join(',')}` : ''} ${entry.say ?? ''}`);
 });
 
 // ---------------------------------------------------------------- who is asking

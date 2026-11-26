@@ -377,7 +377,7 @@ function renderLog(s) {
       continue;
     }
     out.push(
-      `<div><b style="color:${p.color ?? '#79c0ff'}">${esc(p.name)}</b> ${esc(e.text)}${e.say ? ` <span class="say">「${esc(e.say)}」</span>` : ''}${e.emote ? ` ${stickerHtml(p, e.emote, 'log-sticker')}` : ''}${e.ms ? ` <span class="ms">${(e.ms / 1000).toFixed(1)}s</span>` : ''}${e.fallback ? ' <span class="fallback">⚙托管</span>' : ''}</div>`,
+      `<div><b style="color:${p.color ?? '#79c0ff'}">${esc(p.name)}</b> ${esc(e.text)}${e.say ? ` <span class="say">「${esc(e.say)}」</span>` : ''}${e.emote ? ` ${stickerHtml(p, e.emote, 'log-sticker')}` : ''}${e.tools ? ` <span class="tools" title="查询了：${esc(e.tools.join('、'))}">🔍${e.tools.length}</span>` : ''}${e.ms ? ` <span class="ms">${(e.ms / 1000).toFixed(1)}s</span>` : ''}${e.fallback ? ' <span class="fallback">⚙托管</span>' : ''}</div>`,
     );
   }
   const log = $('log');

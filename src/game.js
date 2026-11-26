@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { cardLabel, shuffle } from './cards.js';
 import { aiDecide, askModel, describeAction, positionLabels, quickReplies, shownName } from './ai.js';
+import { historyRound, latestRound } from './rounds.js';
 
 const TALK_MEMORY = 300; // earlier-hand lines of table talk the AIs are shown (config: talkMemory)
 import { Table } from './engine.js';
@@ -228,6 +229,7 @@ export class Game extends EventEmitter {
       this.gameId = snap.gameId ?? this.gameId;
       this.recent = snap.recent ?? [];
       this.talk = snap.talk ?? this.talkFromHistory(snap.gameId);
+      this.handHistory = this.loadHandHistory(snap.gameId);
       if (t.handNo > 0) this.status = snap.status === 'gameOver' ? 'gameOver' : 'handOver';
       this.gameOver = snap.gameOver ?? null;
       this.spectating = Boolean(snap.spectating);
@@ -308,6 +310,8 @@ export class Game extends EventEmitter {
     this.thinking = null;
     this.recent = [];
     this.talk = [];
+    this.handHistory = [];
+    this.startStacks = {};
     this.lastResult = null;
     this.gameOver = null;
     this.eliminations = [];
@@ -329,6 +333,27 @@ export class Game extends EventEmitter {
   trimTalk() {
     const max = Number(this.config.talkMemory ?? TALK_MEMORY);
     if (max > 0 && this.talk.length > max) this.talk.splice(0, this.talk.length - max);
+  }
+
+  // Finished hands of this game (hands.jsonl), for the AIs' get_history_rounds tool.
+  loadHandHistory(gameId) {
+    const out = [];
+    try {
+      for (const line of fs.readFileSync(path.join(this.dataDir, 'hands.jsonl'), 'utf8').split('\n')) {
+        if (!line.includes(`"game":"${gameId}"`)) continue;
+        const rec = JSON.parse(line);
+        if (!rec.names) {
+          // Older records: recover seats and names from the action log, cards from the name-keyed holes.
+          rec.names = {};
+          for (const e of rec.log ?? []) rec.names[e.seat] = e.name;
+          rec.holesBySeat = Object.fromEntries(Object.entries(rec.names).map(([s, n]) => [s, rec.holes?.[n]]));
+          rec.start ??= Object.fromEntries(Object.keys(rec.names).map((s) => [s, undefined]));
+          rec.models = Object.fromEntries(Object.keys(rec.names).map((s) => [s, this.table.players[s]?.model]));
+        }
+        out.push(rec);
+      }
+    } catch {}
+    return out;
   }
 
   // Older snapshots have no talk list: rebuild it from the hand history of the same game.
@@ -377,7 +402,19 @@ export class Game extends EventEmitter {
     this.changed();
     const minDelay = sleep(this.config.minActionDelayMs ?? 600);
     const earlier = this.talk.filter((t) => t.hand < view.handNo);
-    const d = await aiDecide(this.config.llm, p, legal, view, this.recent.slice(-5), this.log, earlier);
+    // The AI looks the table up itself (function calling); config aiTools: false puts everything in the prompt instead.
+    const run =
+      this.config.aiTools === false
+        ? null
+        : {
+            get_latest_round: () => latestRound(this.table.viewFor(p), p, legal, this.startStacks),
+            get_history_rounds: ({ count } = {}) => {
+              const all = this.handHistory.filter((r) => r.hand < view.handNo);
+              const n = Math.max(1, Math.min(all.length, Math.floor(Number(count) || 1)));
+              return { totalFinishedHands: all.length, returned: Math.min(n, all.length), rounds: all.slice(-n).map((r) => historyRound(r, p.seat)) };
+            },
+          };
+    const d = await aiDecide(this.config.llm, p, legal, view, this.recent.slice(-5), this.log, earlier, run);
     await minDelay;
     this.thinking = null;
     return d;
@@ -446,6 +483,7 @@ export class Game extends EventEmitter {
     clearTimeout(this.autoTimer);
     this.autoNextAt = null;
     this.blinds = blindSchedule(this.config, this.table.handNo);
+    this.startStacks = Object.fromEntries(this.table.players.filter((p) => p.stack > 0 && !p.sittingOut).map((p) => [p.seat, p.stack]));
     this.table.smallBlind = this.blinds.sb;
     this.table.bigBlind = this.blinds.bb;
     this.status = 'playing';
@@ -573,6 +611,22 @@ export class Game extends EventEmitter {
     return { ok: true };
   }
 
+  historyExtras() {
+    const t = this.table;
+    const h = t.hand;
+    const inHand = t.players.filter((p) => p.inHand);
+    return {
+      blinds: `${t.smallBlind}/${t.bigBlind}`,
+      names: Object.fromEntries(inHand.map((p) => [p.seat, p.name])),
+      models: Object.fromEntries(inHand.map((p) => [p.seat, p.model ?? null])),
+      humans: inHand.filter((p) => p.kind === 'human').map((p) => p.seat),
+      holesBySeat: Object.fromEntries(inHand.map((p) => [p.seat, p.hole.slice()])),
+      start: Object.fromEntries(inHand.map((p) => [p.seat, this.startStacks?.[p.seat]])),
+      end: Object.fromEntries(inHand.map((p) => [p.seat, p.stack])),
+      button: h.button,
+    };
+  }
+
   afterHand(result) {
     const t = this.table;
     const h = t.hand;
@@ -585,6 +639,7 @@ export class Game extends EventEmitter {
     this.recent.push(this.summarize(result));
     if (this.recent.length > 20) this.recent.shift();
     if (this.eliminationMode()) this.eliminate(result);
+    this.handHistory.push({ game: this.gameId, hand: h.no, board: h.board.slice(), log: h.log, result, ...this.historyExtras() });
     this.save();
     if (this.dataDir) {
       try {
@@ -600,6 +655,7 @@ export class Game extends EventEmitter {
             holes: Object.fromEntries(t.players.filter((p) => p.inHand).map((p) => [p.name, p.hole])),
             log: h.log,
             result,
+            ...this.historyExtras(),
           })}\n`,
         );
       } catch (e) {

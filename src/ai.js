@@ -193,6 +193,106 @@ export function buildPrompt(player, legal, view, recent, talk = []) {
   ].join('\n');
 }
 
+// Tool mode: the prompt only says it is your turn and what you may do; the model fetches the table itself.
+export function buildToolPrompt(player, legal, view) {
+  const options = [];
+  if (legal.canCheck) options.push('"check"（过牌）');
+  if (legal.canCall) options.push(`"call"（跟注 ${legal.toCall}${legal.toCall >= legal.stack ? '，即全下' : ''}）`, '"fold"（弃牌）');
+  if (legal.canRaise) {
+    options.push(
+      legal.minTo >= legal.maxTo
+        ? `"allin"（全下到 ${legal.maxTo}）`
+        : `"raise"（${legal.isBet ? '下注' : '加注'}，amount 为本轮你的总下注额，范围 ${legal.minTo} ~ ${legal.maxTo}；${legal.maxTo} 即全下）`,
+    );
+  }
+  return [
+    `第 ${view.handNo} 手 · ${STREET_NAMES[view.street]}，轮到你行动。`,
+    `你现在可选的行动：${options.join('、')}。`,
+    '',
+    '你可以自己决定调用工具来了解局面（可以调用多次）：',
+    '- get_latest_round：这一手的完整信息——你的手牌和牌型、公共牌、底池、每个人的位置、余额、下注、行动、发言和表情。',
+    '- get_history_rounds(count)：最近 count 手已结束牌局的完整记录（含结果、亮出的牌、所有人的发言和表情），用来分析对手风格、回忆谁说过什么；count 最多到本局全部手数。',
+    '这次决策期间牌局不会变化，同一个工具一般调用一次就够；信息够了就直接做决定。',
+    '',
+    '牌桌交流是可选的：可以只说一句话、只发一个表情包、两者都发，或者什么都不发——不要每次都发言，按局面和人设自然地来（大约一半的时候保持沉默）。',
+    ...(player.stickers?.length ? [`你可用的表情包：${player.stickers.map((s) => (s.label && s.label !== s.id ? `${s.id}（${s.label}）` : s.id)).join('、')}。`] : []),
+    '最终回答只输出一个 JSON 对象，不要输出任何其他文字：',
+    `{"action": "fold|check|call|raise|allin", "amount": <仅 raise 时需要，本轮总下注额，整数>, "say": "<可选：一句符合人设的牌桌发言，中文，20 字以内，可以虚张声势；不说话就用空字符串>"${player.stickers?.length ? ', "emote": "<可选：表情包 id；不发就 null>"' : ''}}`,
+  ].join('\n');
+}
+
+export const ROUND_TOOLS = [
+  {
+    name: 'get_latest_round',
+    description: '获取最新一手（正在进行的这一手）的牌局信息：你的手牌、下注、余额，公共牌，其他人的下注、行动、发言、表情和余额。',
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'get_history_rounds',
+    description: '获取最近几手已经结束的牌局信息（从最近的往前数），每手包括你当时的手牌、下注、余额，公共牌，其他人的下注、发言、表情、余额变化，以及结果和摊牌亮出的牌。',
+    parameters: {
+      type: 'object',
+      properties: { count: { type: 'integer', minimum: 1, description: '要看最近几手；超过本局已打手数时返回全部' } },
+      required: ['count'],
+      additionalProperties: false,
+    },
+  },
+];
+
+async function callResponses(cfg, player, body) {
+  const res = await fetch(`${cfg.baseUrl.replace(/\/$/, '')}/responses`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey(cfg)}` },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(player.timeoutMs ?? cfg.timeoutMs ?? 45000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  return res.json();
+}
+
+// Function-calling loop: the model may call the round tools (handlers in `run`) before answering.
+export async function askWithTools(cfg, player, prompt, tableSize, run, maxRounds = 5) {
+  const input = [{ role: 'user', content: prompt }];
+  const used = [];
+  const tools = ROUND_TOOLS.map((t) => ({ type: 'function', ...t }));
+  for (let round = 0; round < maxRounds; round++) {
+    const body = await callResponses(cfg, player, {
+      model: player.model,
+      instructions: systemPrompt(player, tableSize),
+      input,
+      tools,
+      tool_choice: round === maxRounds - 1 ? 'none' : 'auto',
+      max_output_tokens: player.maxOutputTokens ?? cfg.maxOutputTokens ?? 1500,
+      stream: false,
+      ...(player.reasoning ? { reasoning: { effort: player.reasoning } } : {}),
+    });
+    const out = body.output ?? [];
+    const calls = out.filter((o) => o.type === 'function_call');
+    if (!calls.length) {
+      const text = outputText(body);
+      const parsed = firstJsonObject(text);
+      if (!parsed) throw new Error(`no JSON: ${text.slice(0, 160)}`);
+      return { parsed, used };
+    }
+    input.push(...out.filter((o) => o.type !== 'reasoning' || o.encrypted_content));
+    for (const c of calls) {
+      let args = {};
+      try {
+        args = JSON.parse(c.arguments || '{}');
+      } catch {}
+      let result;
+      try {
+        result = run[c.name] ? await run[c.name](args) : { error: `没有这个工具：${c.name}` };
+      } catch (e) {
+        result = { error: String(e?.message ?? e) };
+      }
+      used.push(c.name === 'get_history_rounds' ? `get_history_rounds(${args.count ?? ''})` : c.name);
+      input.push({ type: 'function_call_output', call_id: c.call_id, output: JSON.stringify(result) });
+    }
+  }
+  throw new Error('too many tool rounds');
+}
+
 function systemPrompt(player, tableSize) {
   return [
     `你是「${player.name}」，一个由 ${player.model} 驱动的德州扑克 AI 玩家，正坐在一张 ${tableSize} 人无限注德州扑克现金桌上，对手里有人类玩家，也有其他 AI 模型。`,
@@ -250,15 +350,20 @@ export function fallbackDecision(player, legal, view) {
   return { action: 'fold' };
 }
 
-export async function aiDecide(cfg, player, legal, view, recent, log = () => {}, talk = []) {
+// run: tool handlers ({ get_latest_round, get_history_rounds }); without them the classic all-in-the-prompt mode is used.
+export async function aiDecide(cfg, player, legal, view, recent, log = () => {}, talk = [], run = null) {
   const start = Date.now();
   const prompt = buildPrompt(player, legal, view, recent, talk);
   let lastError;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const d = await askModel(cfg, player, prompt, view.players.length);
+      // First try: the model looks things up with tools. Retry: everything in the prompt (works without tool support).
+      let d;
+      let used;
+      if (run && attempt === 0) ({ parsed: d, used } = await askWithTools(cfg, player, buildToolPrompt(player, legal, view), view.players.length, run));
+      else d = await askModel(cfg, player, prompt, view.players.length);
       const emote = typeof d.emote === 'string' && player.stickers?.some((s) => s.id === d.emote) ? d.emote : undefined;
-      return { action: d.action, amount: d.amount, say: typeof d.say === 'string' ? d.say.trim() : undefined, emote, ms: Date.now() - start };
+      return { action: d.action, amount: d.amount, say: typeof d.say === 'string' ? d.say.trim() : undefined, emote, ms: Date.now() - start, tools: used };
     } catch (e) {
       lastError = e;
       log(`[ai] ${player.name} (${player.model}) attempt ${attempt + 1} failed after ${Date.now() - start} ms: ${e?.message ?? e}`);
