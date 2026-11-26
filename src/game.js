@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import { cardLabel, shuffle } from './cards.js';
-import { aiDecide, askModel, describeAction, positionLabels, quickReplies, shownName } from './ai.js';
+import { aiDecide, askModel, describeAction, positionLabels, quickReplies, shownName, sidelinePrompt } from './ai.js';
 import { historyRound, latestRound } from './rounds.js';
 
 const TALK_MEMORY = 300; // earlier-hand lines of table talk the AIs are shown (config: talkMemory)
@@ -295,6 +295,12 @@ export class Game extends EventEmitter {
       p.peakStack = p.stack;
     }
     this.resolveArt();
+    table.on('action', ({ entry, player }) => {
+      if (this.table === table) this.sidelineTrigger(entry, player);
+    });
+    table.on('handEnd', ({ result }) => {
+      if (this.table === table) this.sidelineAfterHand(result);
+    });
     // Everything said or sent at the table, kept for the whole game so the AIs remember it.
     table.on('action', ({ entry, player }) => {
       if (this.table !== table || !(entry.say || entry.emote)) return;
@@ -331,6 +337,90 @@ export class Game extends EventEmitter {
 
   changed() {
     this.emit('change');
+  }
+
+  // ---------------------------------------------------------------- 场外互动
+  // AIs that are out of the action this hand (folded or all-in) may chip in when something happens:
+  // an all-in, someone naming them, a showdown. Config: sideline { enabled, chance, cooldownMs, maxPerStreet }.
+  sidelineCfg() {
+    const c = this.config.sideline ?? {};
+    return { enabled: c.enabled !== false, chance: c.chance ?? 0.55, cooldownMs: c.cooldownMs ?? 15000, maxPerStreet: c.maxPerStreet ?? 2, globalGapMs: c.globalGapMs ?? 4000 };
+  }
+
+  sidelineCandidates(exclude = []) {
+    const now = Date.now();
+    const cfg = this.sidelineCfg();
+    return this.table.players.filter(
+      (p) =>
+        p.kind === 'ai' &&
+        p.inHand &&
+        (p.folded || p.allIn || this.status !== 'playing') &&
+        !exclude.includes(p.seat) &&
+        this.thinking?.seat !== p.seat &&
+        !this.sidelineBusy?.has(p.seat) &&
+        now - (p.sidelineAt ?? 0) > cfg.cooldownMs,
+    );
+  }
+
+  sidelineTrigger(entry, player) {
+    const cfg = this.sidelineCfg();
+    if (!cfg.enabled || this.status !== 'playing') return;
+    const h = this.table.hand;
+    const said = entry.say ?? '';
+    // Someone talks to a character by name: she answers even from the rail.
+    if (said) {
+      const named = this.sidelineCandidates([player.seat]).filter((p) => [p.name, p.title, p.key].filter(Boolean).some((n) => said.toLowerCase().includes(String(n).toLowerCase())));
+      for (const p of named.slice(0, 2)) this.sideline(p, `${shownName(player.name, player.seat === 0)} 刚刚点了你的名：「${said}」`, true);
+      if (named.length) return;
+    }
+    const big = entry.allIn && ['raise', 'call'].includes(entry.action);
+    const humanTalk = entry.action === 'chat' && player.kind === 'human' && said;
+    if (!big && !humanTalk) return;
+    const onStreet = h.log.filter((e) => e.sideline && e.street === h.street).length + (this.sidelineBusy?.size ?? 0);
+    if (onStreet >= cfg.maxPerStreet || Date.now() - (this.sidelineLast ?? 0) < cfg.globalGapMs) return;
+    if (Math.random() > (big ? cfg.chance : cfg.chance * 0.6)) return;
+    const pool = this.sidelineCandidates([player.seat]);
+    const p = pool[Math.floor(Math.random() * pool.length)];
+    if (!p) return;
+    const what = big ? `${shownName(player.name, player.seat === 0)} ${describeAction(entry)}，全下了！` : `${shownName(player.name, player.seat === 0)} 在牌桌上说：「${said}」`;
+    this.sideline(p, what, false);
+  }
+
+  sidelineAfterHand(result) {
+    const cfg = this.sidelineCfg();
+    if (!cfg.enabled) return;
+    const pot = result.pots.reduce((a, x) => a + x.amount, 0);
+    const showdown = result.reveals?.length >= 2;
+    if (!showdown && pot < this.table.bigBlind * 25) return;
+    if (Math.random() > cfg.chance) return;
+    const winners = new Set(result.pots.flatMap((x) => x.winners));
+    const pool = this.sidelineCandidates([...winners]);
+    const p = pool[Math.floor(Math.random() * pool.length)];
+    if (!p) return;
+    const names = [...winners].map((s) => shownName(this.table.players[s].name, s === 0)).join('、');
+    const shown = (result.reveals ?? []).map((r) => `${shownName(this.table.players[r.seat].name, r.seat === 0)} 亮出 ${r.hand}`).join('；');
+    this.sideline(p, `这一手结束了：${names} 赢走 ${pot} 筹码${shown ? `（摊牌：${shown}）` : ''}。`, false);
+  }
+
+  async sideline(p, why, mustAnswer) {
+    (this.sidelineBusy ??= new Set()).add(p.seat);
+    p.sidelineAt = Date.now();
+    this.sidelineLast = Date.now();
+    const handNo = this.table.hand?.no;
+    try {
+      const view = this.table.viewFor(p);
+      const d = await askModel({ ...this.config.llm, timeoutMs: 20000 }, p, sidelinePrompt(p, view, why + (mustAnswer ? '（有人在叫你，最好回一句）' : '')), this.table.players.length);
+      const say = typeof d.say === 'string' ? d.say.trim().slice(0, 60) : '';
+      const emote = typeof d.emote === 'string' && p.stickers?.some((s) => s.id === d.emote) ? d.emote : undefined;
+      // Too late once the next hand has started.
+      if ((!say && !emote) || this.table.hand?.no !== handNo) return;
+      this.table.chat(p, say, { emote, sideline: true });
+      this.log(`[hand ${handNo}] ${p.name} (场外) ${say}${emote ? ` [${emote}]` : ''}`);
+    } catch (e) {
+      this.log(`[game] sideline ${p.name} failed: ${e?.message ?? e}`);
+    } finally {
+      this.sidelineBusy.delete(p.seat);
+    }
   }
 
   trimTalk() {
@@ -521,7 +611,7 @@ export class Game extends EventEmitter {
     try {
       const fresh = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
       this.config.llm = fresh.llm ?? this.config.llm;
-      for (const key of ['minActionDelayMs', 'autoNextHandMs', 'aiAutoRebuy', 'eliminateBusted', 'defeatStyle', 'randomSeats', 'handsPerLevel', 'blindLevels', 'quickReplies', 'quickReplyModel', 'revealAllCards', 'spectateDelayMs', 'imageModel']) if (key in fresh) this.config[key] = fresh[key];
+      for (const key of ['minActionDelayMs', 'autoNextHandMs', 'aiAutoRebuy', 'eliminateBusted', 'defeatStyle', 'randomSeats', 'handsPerLevel', 'blindLevels', 'quickReplies', 'quickReplyModel', 'revealAllCards', 'spectateDelayMs', 'imageModel', 'sideline']) if (key in fresh) this.config[key] = fresh[key];
       (fresh.ai ?? []).forEach((a, i) => {
         const p = this.table.players.find((x) => x.id === `ai${i + 1}`);
         if (!p) return;

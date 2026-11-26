@@ -108,6 +108,7 @@ function gameTab() {
     ${field('每局随机换座', 'randomSeats', { type: 'bool' })}
     ${field('轮到我时生成快速发言', 'quickReplies', { type: 'bool' })}
     ${field('明牌模式（显示所有 AI 底牌）', 'revealAllCards', { type: 'bool' })}
+    <label class="sf chk"><input type="checkbox" id="sidelineChk" ${draft.sideline?.enabled === false ? '' : 'checked'}> 场外互动（弃牌 / 全下的 AI 会插嘴、被点名会回应）</label>
   </div>
   <h4 class="shead">📶 局域网模式</h4>
   <div class="sgrid">
@@ -261,6 +262,10 @@ function render() {
       status('有未保存的修改');
       render();
     });
+  });
+  $('sidelineChk')?.addEventListener('change', (e) => {
+    draft.sideline = { ...(draft.sideline ?? {}), enabled: e.target.checked };
+    status('有未保存的修改');
   });
   $('blindLevelsText')?.addEventListener('input', (e) => {
     const levels = e.target.value

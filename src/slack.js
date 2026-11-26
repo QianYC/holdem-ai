@@ -284,7 +284,7 @@ export class SlackMirror {
       const who = p.seat === 0 ? '*你*' : `*${p.name}*`;
       const flag = e.fallback ? ' ⚙️' : '';
       if (e.action === 'chat') {
-        lines.push(`• ${who} 💬 _「${e.say}」_`);
+        lines.push(`• ${who} ${e.sideline ? '（场外）' : '💬'}${e.say ? ` _「${e.say}」_` : ''}${e.emote ? `  ${stickerTag(p, e.emote)}` : ''}`);
         continue;
       }
       lines.push(`• ${who} ${e.text}${e.say ? `  _「${e.say}」_` : ''}${e.emote ? `  ${stickerTag(p, e.emote)}` : ''}${flag}`);

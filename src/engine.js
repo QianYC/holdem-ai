@@ -238,10 +238,10 @@ export class Table extends EventEmitter {
   }
 
   // Table talk outside of an action (the human's chat). Recorded in the hand log for everyone to read.
-  chat(p, text) {
+  chat(p, text, { emote, sideline } = {}) {
     const h = this.hand;
     if (!h) return null;
-    const entry = { street: h.street, seat: p.seat, name: p.name, action: 'chat', amount: 0, say: String(text).slice(0, 80), pot: this.pot(), stack: p.stack, idx: h.log.length, at: Date.now() };
+    const entry = { street: h.street, seat: p.seat, name: p.name, action: 'chat', amount: 0, say: text ? String(text).slice(0, 80) : undefined, emote: emote || undefined, sideline: sideline || undefined, pot: this.pot(), stack: p.stack, idx: h.log.length, at: Date.now() };
     p.lastChat = entry;
     h.log.push(entry);
     this.emit('action', { hand: h, entry, player: p });

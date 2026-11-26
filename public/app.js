@@ -373,7 +373,7 @@ function renderLog(s) {
     }
     const p = s.players[e.seat];
     if (e.action === 'chat') {
-      out.push(`<div class="chatline"><b style="color:${p.color ?? '#79c0ff'}">${esc(p.name)}</b> 💬 <span class="say">「${esc(e.say)}」</span></div>`);
+      out.push(`<div class="chatline${e.sideline ? ' sideline' : ''}"><b style="color:${p.color ?? '#79c0ff'}">${esc(p.name)}</b> ${e.sideline ? '<span class="side-tag">场外</span>' : '💬'} ${e.say ? `<span class="say">「${esc(e.say)}」</span>` : ''}${e.emote ? ` ${stickerHtml(p, e.emote, 'log-sticker')}` : ''}</div>`);
       continue;
     }
     out.push(

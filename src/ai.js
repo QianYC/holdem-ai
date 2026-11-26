@@ -144,7 +144,7 @@ function historyLines(log, board, cards) {
       const boardNow = street === 'flop' ? board.slice(0, 3) : street === 'turn' ? board.slice(0, 4) : board;
       history.push(`【${STREET_NAMES[street]}】${street === 'preflop' ? '' : ` 公共牌 ${cards(boardNow)}`}`);
     }
-    if (e.action === 'chat') history.push(`  ${shownName(e.name, e.seat === 0)} 说：「${e.say}」`);
+    if (e.action === 'chat') history.push(`  ${shownName(e.name, e.seat === 0)}${e.sideline ? '（场外）' : ''}${e.say ? ` 说：「${e.say}」` : ''}${e.emote ? ` [发了表情：${STICKER_NAMES[e.emote] ?? e.emote}]` : ''}`);
     else history.push(`  ${shownName(e.name, e.seat === 0)}: ${describeAction(e)}${e.say ? ` —「${e.say}」` : ''}${e.emote ? ` [发了表情：${STICKER_NAMES[e.emote] ?? e.emote}]` : ''}`);
   }
   return history;
@@ -188,6 +188,27 @@ export async function quickReplies(cfg, model, human, legal, view) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const d = firstJsonObject(outputText(await res.json())) ?? {};
   return QUICK_STYLES.map((s) => ({ style: s.style, label: s.label, text: typeof d[s.style] === 'string' ? d[s.style].trim().slice(0, 40) : '' })).filter((x) => x.text);
+}
+
+// Sideline banter: a folded / all-in character reacts to what just happened at the table.
+export function sidelinePrompt(player, view, why) {
+  const cards = (cs) => (cs?.length ? cs.map(cardLabel).join(' ') : '（无）');
+  const me = view.players[player.seat];
+  const status = me?.folded ? '你这一手已经弃牌了' : me?.allIn ? '你已经全下，只能等结果' : '这一手你暂时不用行动';
+  return [
+    `第 ${view.handNo} 手 · ${STREET_NAMES[view.street]}，公共牌 ${cards(view.board)}，底池 ${view.pot}。${status}。`,
+    `你的手牌：${cards(me?.hole)}（别人看不到，别直接说出来）`,
+    '',
+    '本手到目前为止：',
+    historyLines(view.log, view.board, cards).join('\n') || '（无）',
+    '',
+    `刚刚发生的事：${why}`,
+    '',
+    '你在场边，可以插一句嘴：吐槽、起哄、拱火、替人加油、回应别人点你的名都行；也可以只发一个表情，或者干脆不说话（觉得没必要就别说）。',
+    ...(player.stickers?.length ? [`你可用的表情包：${player.stickers.map((s) => (s.label && s.label !== s.id ? `${s.id}（${s.label}）` : s.id)).join('、')}。`] : []),
+    '只输出一个 JSON 对象，不要输出任何其他文字：',
+    `{"say": "<一句符合人设的场外发言，中文，20 字以内；不说就用空字符串>"${player.stickers?.length ? ', "emote": "<可选：表情包 id；不发就 null>"' : ''}}`,
+  ].join('\n');
 }
 
 export function buildPrompt(player, legal, view, recent, talk = []) {
