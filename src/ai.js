@@ -15,6 +15,49 @@ export function apiKey(cfg) {
   return 'local';
 }
 
+// ---------------------------------------------------------------- model routes
+// Default: the OpenAI Responses endpoint in llm.baseUrl. A character with `provider` uses llm.providers[provider]:
+//   { type: 'anthropic-messages', baseUrl, apiKey | apiKeyEnv | auth: 'dsh-account' }
+// auth 'dsh-account' reuses the DeepSeek account you are signed in with in DeepSeek Harness (~/.dsh/.credentials.yaml).
+export function routeOf(cfg, player) {
+  const name = player?.provider;
+  if (!name) return { name: 'default', type: 'openai-responses', baseUrl: cfg.baseUrl };
+  const p = cfg.providers?.[name];
+  if (!p) throw new Error(`没有配置模型提供方 ${name}`);
+  return { name, type: 'openai-responses', ...p };
+}
+
+let dshTokenCache = { at: 0, token: null };
+function dshAccountToken() {
+  if (Date.now() - dshTokenCache.at < 60000 && dshTokenCache.token) return dshTokenCache.token;
+  const home = process.env.DSH_HOME ?? path.join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.dsh');
+  const text = fs.readFileSync(path.join(home, '.credentials.yaml'), 'utf8');
+  const at = text.indexOf('deepseek-account-platform/default:');
+  const m = at >= 0 ? /\n\s+token:\s*["']?([^"'\r\n]+)/.exec(text.slice(at)) : null;
+  if (!m) throw new Error('没有找到 DeepSeek 账号登录（先在 DeepSeek Harness 里登录）');
+  dshTokenCache = { at: Date.now(), token: m[1].trim() };
+  return dshTokenCache.token;
+}
+
+function routeHeaders(cfg, route) {
+  if (route.type === 'anthropic-messages') {
+    if (route.auth === 'dsh-account') return { 'x-dsh-auth-token': dshAccountToken(), 'anthropic-version': '2023-06-01' };
+    const key = route.apiKey ?? process.env[route.apiKeyEnv ?? 'ANTHROPIC_API_KEY'];
+    if (!key) throw new Error(`提供方 ${route.name} 缺少 API Key（apiKey 或环境变量 ${route.apiKeyEnv ?? 'ANTHROPIC_API_KEY'}）`);
+    return { 'x-api-key': key, 'anthropic-version': '2023-06-01' };
+  }
+  return { authorization: `Bearer ${route.apiKey ?? (route.apiKeyEnv ? process.env[route.apiKeyEnv] : apiKey(cfg))}` };
+}
+
+// Model ids a provider offers (for the settings dropdown).
+export async function listModels(cfg, route) {
+  const url = route.type === 'anthropic-messages' ? `${new URL(route.baseUrl).origin}/models` : `${route.baseUrl.replace(/\/$/, '')}/models`;
+  const res = await fetch(url, { headers: routeHeaders(cfg, route), redirect: 'error', signal: AbortSignal.timeout(10000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const body = await res.json();
+  return (body.data ?? body.models ?? []).map((m) => m.id ?? m.name).filter(Boolean).sort();
+}
+
 export function firstJsonObject(text) {
   const s = String(text ?? '');
   for (let start = s.indexOf('{'); start >= 0; start = s.indexOf('{', start + 1)) {
@@ -240,9 +283,10 @@ export const ROUND_TOOLS = [
 ];
 
 async function callResponses(cfg, player, body) {
-  const res = await fetch(`${cfg.baseUrl.replace(/\/$/, '')}/responses`, {
+  const route = routeOf(cfg, player);
+  const res = await fetch(`${route.baseUrl.replace(/\/$/, '')}/responses`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey(cfg)}` },
+    headers: { 'content-type': 'application/json', ...routeHeaders(cfg, route) },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(player.timeoutMs ?? cfg.timeoutMs ?? 45000),
   });
@@ -251,7 +295,59 @@ async function callResponses(cfg, player, body) {
 }
 
 // Function-calling loop: the model may call the round tools (handlers in `run`) before answering.
+async function callMessages(cfg, route, player, body) {
+  const res = await fetch(`${route.baseUrl.replace(/\/$/, '')}/v1/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...routeHeaders(cfg, route) },
+    body: JSON.stringify(body),
+    redirect: 'error',
+    signal: AbortSignal.timeout(player.timeoutMs ?? cfg.timeoutMs ?? 45000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  return res.json();
+}
+
+// Anthropic Messages version of the loop (tool_use / tool_result blocks; thinking blocks are passed back as-is).
+async function messagesLoop(cfg, route, player, prompt, tableSize, run, maxRounds = 5) {
+  const messages = [{ role: 'user', content: prompt }];
+  const used = [];
+  const tools = run ? ROUND_TOOLS.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })) : null;
+  for (let round = 0; round < maxRounds; round++) {
+    const body = await callMessages(cfg, route, player, {
+      model: player.model,
+      system: systemPrompt(player, tableSize),
+      messages,
+      max_tokens: Math.max(2000, player.maxOutputTokens ?? cfg.maxOutputTokens ?? 4000),
+      ...(tools ? { tools, tool_choice: { type: round === maxRounds - 1 ? 'none' : 'auto' } } : {}),
+    });
+    const content = body.content ?? [];
+    const uses = content.filter((c) => c.type === 'tool_use');
+    if (!uses.length || !run) {
+      const text = content.filter((c) => c.type === 'text').map((c) => c.text).join('');
+      const parsed = firstJsonObject(text);
+      if (!parsed) throw new Error(`no JSON: ${text.slice(0, 160)}`);
+      return { parsed, used };
+    }
+    messages.push({ role: 'assistant', content });
+    const results = [];
+    for (const u of uses) {
+      let result;
+      try {
+        result = run[u.name] ? await run[u.name](u.input ?? {}) : { error: `没有这个工具：${u.name}` };
+      } catch (e) {
+        result = { error: String(e?.message ?? e) };
+      }
+      used.push(u.name === 'get_history_rounds' ? `get_history_rounds(${u.input?.count ?? ''})` : u.name);
+      results.push({ type: 'tool_result', tool_use_id: u.id, content: JSON.stringify(result) });
+    }
+    messages.push({ role: 'user', content: results });
+  }
+  throw new Error('too many tool rounds');
+}
+
 export async function askWithTools(cfg, player, prompt, tableSize, run, maxRounds = 5) {
+  const route = routeOf(cfg, player);
+  if (route.type === 'anthropic-messages') return messagesLoop(cfg, route, player, prompt, tableSize, run, maxRounds);
   const input = [{ role: 'user', content: prompt }];
   const used = [];
   const tools = ROUND_TOOLS.map((t) => ({ type: 'function', ...t }));
@@ -313,6 +409,8 @@ function outputText(body) {
 }
 
 export async function askModel(cfg, player, prompt, tableSize) {
+  const route = routeOf(cfg, player);
+  if (route.type === 'anthropic-messages') return (await messagesLoop(cfg, route, player, prompt, tableSize, null)).parsed;
   const body = {
     model: player.model,
     instructions: systemPrompt(player, tableSize),
@@ -321,14 +419,7 @@ export async function askModel(cfg, player, prompt, tableSize) {
     stream: false,
     ...(player.reasoning ? { reasoning: { effort: player.reasoning } } : {}),
   };
-  const res = await fetch(`${cfg.baseUrl.replace(/\/$/, '')}/responses`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey(cfg)}` },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(player.timeoutMs ?? cfg.timeoutMs ?? 45000),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  const text = outputText(await res.json());
+  const text = outputText(await callResponses(cfg, player, body));
   const parsed = firstJsonObject(text);
   if (!parsed) throw new Error(`no JSON: ${text.slice(0, 160)}`);
   return parsed;

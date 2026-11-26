@@ -655,7 +655,31 @@ function renderStart(s) {
     : s.lan?.joined || s.you >= 0
       ? '<button class="primary" id="startBack">↩ 进入牌桌</button>'
       : '<button class="gold big" id="startJoin">🙋 加入牌桌</button><button class="ghost" id="startBack">先旁观</button>';
-  el.innerHTML = `
+  const sc = s.scene;
+  const dealer = sc ? ais.find((p) => p.key === sc.dealer && p.dealerArt) : null;
+  const seated = ais.filter((p) => p !== dealer);
+  if (sc && seated.every((p) => p.seatArt)) {
+    el.innerHTML = `
+      <div class="scene-wrap">
+        <img class="scene-bg" src="${esc(sc.background)}" alt="">
+        <div class="stage" id="stage">
+          ${seated.map((p, i) => sceneSprite(p, i, seated.length)).join('')}
+          <img class="scene-table" src="${esc(sc.table)}" alt="">
+          ${dealer ? `<img class="sprite croupier" data-seat="${dealer.seat}" src="${esc(dealer.dealerArt)}" style="--c:${dealer.color ?? '#fff'}" alt="${esc(dealer.name)}">` : ''}
+          <div class="scene-tip hidden" id="sceneTip"></div>
+        </div>
+        <div class="scene-top">
+          <div class="start-title">♠♥ 德州扑克 ♦♣</div>
+          <div class="start-sub">${humans.length > 1 ? `${humans.length} 位真人` : '你'} vs ${ais.length} 个 AI · ${blinds}${dealer ? ` · 今晚的荷官：${esc(dealer.name)}` : ''}</div>
+        </div>
+        <div class="scene-bottom">
+          ${humans.length > 1 ? `<div class="start-humans">真人玩家：${humans.map((p) => esc(nameOf(p))).join('、')}</div>` : ''}
+          <div class="start-actions">${mainBtn}${s.isHost ? '<button class="ghost" id="startSettings">⚙ 设置阵容</button>' : ''}</div>
+          <div class="start-hint">把鼠标移到角色身上看人设</div>
+        </div>
+      </div>`;
+    bindScene(s);
+  } else el.innerHTML = `
     <div class="start-inner">
       <div class="start-title">♠♥ 德州扑克 ♦♣</div>
       <div class="start-sub">${humans.length > 1 ? `${humans.length} 位真人` : '你'} vs ${ais.length} 个 AI · ${blinds}</div>
@@ -679,6 +703,79 @@ function renderStart(s) {
   if ($('startJoin')) $('startJoin').onclick = () => openJoin(true);
   if ($('startSettings')) $('startSettings').onclick = () => openSettings('ai');
 }
+// ---------------------------------------------------------------- start page: table scene
+// Seats follow the far rail of the table layer (an ellipse): the outer seats sit lower and look closer.
+function sceneSprite(p, i, n) {
+  const u = n > 1 ? (i / (n - 1)) * 2 - 1 : 0; // -1 … 1 from left to right
+  const x = 56 + u * 35; // the dealer stands on the left end
+  const near = u * u;
+  const h = 40 * (1 + 0.15 * near);
+  const bottom = 100 - (47 + 10 * near) - 9; // sprite bottom sits a bit below the rail (hidden by the felt)
+  return `<img class="sprite" data-seat="${p.seat}" src="${esc(p.seatArt)}" alt="${esc(p.name)}"
+    style="--c:${p.color ?? '#fff'};left:${x}%;bottom:${bottom}%;height:${h}%;z-index:${10 + Math.round(near * 10)}">`;
+}
+
+// Hover = the character under the cursor (alpha hit test on the cut-outs), outlined, with her persona.
+function bindScene(s) {
+  const stage = $('stage');
+  const tip = $('sceneTip');
+  const sprites = [...stage.querySelectorAll('.sprite')];
+  const masks = new Map();
+  for (const img of sprites) {
+    const load = () => {
+      const c = document.createElement('canvas');
+      c.width = 128;
+      c.height = Math.round((128 * img.naturalHeight) / img.naturalWidth) || 192;
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.drawImage(img, 0, 0, c.width, c.height);
+      try {
+        masks.set(img, { c, data: g.getImageData(0, 0, c.width, c.height).data });
+      } catch {}
+    };
+    if (img.complete && img.naturalWidth) load();
+    else img.addEventListener('load', load, { once: true });
+  }
+  const hit = (img, x, y) => {
+    const r = img.getBoundingClientRect();
+    if (x < r.left || x > r.right || y < r.top || y > r.bottom) return false;
+    const m = masks.get(img);
+    if (!m) return false;
+    const px = Math.floor(((x - r.left) / r.width) * m.c.width);
+    const py = Math.floor(((y - r.top) / r.height) * m.c.height);
+    return m.data[(py * m.c.width + px) * 4 + 3] > 40;
+  };
+  let hot = null;
+  stage.onmousemove = (e) => {
+    const order = sprites.slice().sort((a, b) => Number(getComputedStyle(b).zIndex) - Number(getComputedStyle(a).zIndex) || (b.classList.contains('croupier') ? 1 : 0) - (a.classList.contains('croupier') ? 1 : 0));
+    const found = order.find((img) => hit(img, e.clientX, e.clientY)) ?? null;
+    if (found !== hot) {
+      hot?.classList.remove('hot');
+      hot = found;
+      stage.classList.toggle('hovering', Boolean(hot));
+      if (hot) {
+        hot.classList.add('hot');
+        const p = S.players[Number(hot.dataset.seat)];
+        const isDealer = hot.classList.contains('croupier');
+        tip.innerHTML = `<div class="nm" style="color:${p.color ?? '#fff'}">${esc(p.name)} <span>${esc(p.title ?? '')}${isDealer ? ' · 今晚的荷官' : ''}</span></div><div class="md">${esc(p.model ?? '')}</div>${p.persona ? `<div class="ps">${esc(p.persona)}</div>` : ''}`;
+        tip.classList.remove('hidden');
+      } else tip.classList.add('hidden');
+    }
+    if (hot) {
+      const r = stage.getBoundingClientRect();
+      const left = Math.min(Math.max(e.clientX - r.left + 18, 8), r.width - 320);
+      const top = Math.min(Math.max(e.clientY - r.top + 18, 8), r.height - tip.offsetHeight - 8);
+      tip.style.left = `${left}px`;
+      tip.style.top = `${top}px`;
+    }
+  };
+  stage.onmouseleave = () => {
+    hot?.classList.remove('hot');
+    hot = null;
+    stage.classList.remove('hovering');
+    tip.classList.add('hidden');
+  };
+}
+
 // Make the cast cards as large as the window allows: try 1–3 rows and keep the biggest card size.
 function layoutCast() {
   const grid = document.querySelector('#start .cast-grid');

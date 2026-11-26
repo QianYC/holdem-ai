@@ -1,6 +1,6 @@
 # 🃏 Hold'em AI — 你 vs 一桌大模型的德州扑克
 
-> 一张无限注德州扑克桌：你坐一个位置，其余座位都由**大模型**扮演的角色坐着（默认 7 个，最多 9 个，模型和角色都能自己配）——它们会算底池赔率、会诈唬、会在牌桌上嘴你、会发表情包；输光了还有专属的战败画面。浏览器里玩，也可以接入 Slack 在线程里点按钮出牌。
+> 一张无限注德州扑克桌：你坐一个位置，其余座位都由**大模型**扮演的角色坐着（默认 9 个，最多 9 个，模型和角色都能自己配）——它们会算底池赔率、会诈唬、会在牌桌上嘴你、会发表情包；输光了还有专属的战败画面。浏览器里玩，也可以接入 Slack 在线程里点按钮出牌。
 
 *A local No-Limit Texas Hold'em game: you vs a table of LLM-driven characters (1–9, any models), with personas, table talk, stickers, elimination screens, procedural BGM and optional Slack play.*
 
@@ -30,8 +30,8 @@
 
 ## ✨ 特色
 
-- **一桌大模型**：默认 7 个角色——Claude Opus / Sonnet / Haiku、GPT-6.2 Sol、GPT-6.1 Terra、GPT-6.2 Astra、Grok 4.7。AI 数量（1–9）、模型、名字、人设、形象、表情全部可配置；任何 OpenAI Responses API 兼容的模型都能上桌，**同一个模型也可以扮演多个不同角色**（每个角色每次决策都是独立的请求，互不共享上下文）。
-- **开始页**：开局前展示全部角色的立绘、称号和模型，鼠标移上去看人设；随时可以点「🎴 阵容」再看。
+- **一桌大模型**：默认 9 个角色——Claude Opus / Sonnet / Haiku、GPT-6.2 Sol、GPT-6.1 Terra、GPT-6.2 Astra、Grok 4.7、DeepSeek V4 Pro、DeepSeek Flash。AI 数量（1–9）、模型、名字、人设、形象、表情全部可配置；任何 OpenAI Responses API 兼容的模型都能上桌，**同一个模型也可以扮演多个不同角色**（每个角色每次决策都是独立的请求，互不共享上下文）。
+- **开始页**：一张牌桌场景——所有角色围着牌桌入座，其中一位当荷官；鼠标移到谁身上，谁就描边高亮并显示人设。场景图缺失时退回立绘卡片墙。随时可以点「🎴 阵容」再看。
 - **设置界面**：网页右上角「⚙ 设置」——改规则、增删 AI、换模型、写人设、上传或一键生成立绘 / 胜负姿势 / 表情包，保存即写入 `config.json`。
 - **盲注逐级上涨**：锦标赛结构，默认每 10 手升一级（10/20 → 15/30 → 20/40 → …），级别和下次升盲显示在页面顶部。
 - **完整的无限注规则**：盲注、按钮轮转、最小加注、不完整全下不重开加注、多重边池、余码分配、单挑规则，配单元测试和随机对局的筹码守恒测试。
@@ -101,10 +101,30 @@ Windows 可以直接双击 `start.cmd`（后台启动并打开浏览器）。
 | `imageModel` | `github-copilot/gpt-image-2.5-flare` | `npm run art` 用的图像模型 |
 | `stickers` | 6 种 | 表情包定义：`{id: {label, emoji, prompt}}` |
 | `handsPerLevel` / `blindLevels` | 10 / 自动 | 每隔几手升一级盲注（0 = 固定盲注）；级别列表 `[[10,20],[15,30],…]`，不写则按起始小盲自动生成，最后一级之后每级翻倍 |
-| `ai[]` | 7 个角色 | 1–9 个，见下 |
+| `llm.providers` | `deepseek` | 额外的模型提供方，见「多个模型提供方」 |
+| `scene` | | 开始页牌桌场景：荷官是谁、房间 / 牌桌 / 荷官装扮的生成提示词 |
+| `ai[]` | 9 个角色 | 1–9 个，见下 |
 | `slack` | 关闭 | 见「Slack 接入」 |
 
 这些都可以直接在网页的「⚙ 设置」里改。模型参数、人设、头像、表情等改完**从下一手起生效**；AI 名单、模型、起始筹码、盲注在**新的一局**生效（设置里有「保存并开新局」）；端口和 Slack 配置需要重启。
+
+## 🔌 多个模型提供方
+
+默认所有角色都走 `llm.baseUrl`（OpenAI Responses 兼容）。某个角色要用别的服务时，在 `llm.providers` 里声明一个提供方，再给角色写 `"provider"`：
+
+```json
+"llm": {
+  "baseUrl": "http://127.0.0.1:4141/v1",
+  "providers": {
+    "deepseek": { "type": "anthropic-messages", "baseUrl": "https://api.deepseek.com/anthropic", "apiKeyEnv": "DEEPSEEK_API_KEY" }
+  }
+},
+"ai": [ { "key": "dsflash", "name": "DeepSeek Flash", "provider": "deepseek", "model": "deepseek-flash", "…": "…" } ]
+```
+
+- `type`：`openai-responses`（默认）或 `anthropic-messages`（DeepSeek、Anthropic 等 Messages 兼容接口）；两种都支持 AI 的工具调用。
+- 鉴权：`apiKey`、`apiKeyEnv`（环境变量名），或 `"auth": "dsh-account"`——直接使用你在 DeepSeek Harness 里登录的 DeepSeek 账号。
+- 设置页的模型下拉框会把每个提供方的模型单独分组列出。
 
 ## 🎭 自定义 AI、人设、形象和表情
 
@@ -148,6 +168,7 @@ public/characters/<key>/
 npm run art                     # 全部：缺立绘的下载/生成 → 生成胜负姿势 → 生成表情包
 npm run art:portraits -- grok   # 只处理某个角色
 npm run art:stickers -- --force # 重新生成（覆盖已有文件）
+node tools/art.mjs scene        # 开始页场景：房间、牌桌、每个角色的入座图和荷官图（透明背景）
 ```
 
 表情包生成后是 1024px，Windows 上可以用 `powershell -File tools/shrink.ps1` 缩到 256px。

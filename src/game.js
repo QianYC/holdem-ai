@@ -58,6 +58,8 @@ export function scanArt(publicDir, a, stickerMeta = {}) {
     portrait: exists(a.portrait) ? a.portrait : find('portrait'),
     win: exists(a.winPortrait) ? a.winPortrait : find('win'),
     lose: exists(a.losePortrait) ? a.losePortrait : find('lose'),
+    seat: find('seat'),
+    dealer: find('dealer'),
     stickers,
   };
 }
@@ -204,8 +206,9 @@ export class Game extends EventEmitter {
     try {
       const snap = JSON.parse(fs.readFileSync(file, 'utf8'));
       const byId = new Map(this.table.players.map((p) => [p.id, p]));
-      if (snap.players?.length !== byId.size || snap.players.some((p) => !byId.has(p.id)) || snap.players[0].id !== 'human') return;
-      if (snap.players.some((p, i) => p.id !== this.table.players[i].id)) this.newGame({ order: snap.players.slice(1).map((p) => p.id) });
+      if (!snap.players?.length || snap.players.some((p) => !byId.has(p.id)) || snap.players[0].id !== 'human') return;
+      // Characters added to the config since then join at the next new game; until then keep the saved seats.
+      if (snap.players.length !== byId.size || snap.players.some((p, i) => p.id !== this.table.players[i].id)) this.newGame({ order: snap.players.slice(1).map((p) => p.id), exact: true });
       const t = this.table;
       snap.players.forEach((p, i) =>
         Object.assign(t.players[i], {
@@ -263,7 +266,7 @@ export class Game extends EventEmitter {
     }
   }
 
-  newGame({ order } = {}) {
+  newGame({ order, exact = false } = {}) {
     const c = this.config;
     if (this.pending) this.pending.resolve({ action: 'fold', source: 'reset' });
     this.gameId = Date.now().toString(36);
@@ -272,7 +275,7 @@ export class Game extends EventEmitter {
     const others = [...guests, ...ais];
     // Every new game seats everyone else in a random order around the host (each viewer is drawn at the bottom).
     let seated = order ? order.map((id) => others.find((a) => a.id === id)).filter(Boolean) : c.randomSeats === false ? others : shuffle(others.slice());
-    if (seated.length !== others.length) seated = others;
+    if (seated.length !== others.length && !exact) seated = others;
     const seats = [{ id: 'human', name: c.humanName ?? '你', kind: 'human', stack: c.startingStack }, ...seated];
     const table = new Table({
       seats,
@@ -544,6 +547,18 @@ export class Game extends EventEmitter {
     }
   }
 
+  // Start-page table scene (public/scene/): room background + transparent table layer.
+  sceneArt() {
+    if (!this.publicDir) return null;
+    const file = (base) => {
+      const n = IMG_EXT.map((e) => base + e).find((x) => fs.existsSync(path.join(this.publicDir, 'scene', x)));
+      return n ? `/scene/${n}?v=${Math.floor(fs.statSync(path.join(this.publicDir, 'scene', n)).mtimeMs)}` : null;
+    };
+    const background = file('background');
+    const table = file('table');
+    return background && table ? { background, table, dealer: this.config.scene?.dealer ?? null } : null;
+  }
+
   // Character art lives in public/characters/<key>/: portrait.*, win.*, lose.* and stickers/*.
   // Explicit paths in the config (portrait / winPortrait / losePortrait) take precedence.
   resolveArt() {
@@ -552,7 +567,7 @@ export class Game extends EventEmitter {
       p.stickers = [];
       if (p.kind !== 'ai' || !this.publicDir || !p.key) continue;
       const art = scanArt(this.publicDir, p, this.config.stickers);
-      p.media = { portrait: art.portrait, win: art.win, lose: art.lose };
+      p.media = { portrait: art.portrait, win: art.win, lose: art.lose, seat: art.seat, dealer: art.dealer };
       p.stickers = art.stickers;
     }
   }
@@ -950,6 +965,7 @@ export class Game extends EventEmitter {
       handNo: t.handNo,
       smallBlind: t.smallBlind,
       serverNow: Date.now(),
+      scene: this.sceneArt(),
       blindLevel: this.blinds?.level ?? 1,
       autoNextHandMs: this.config.autoNextHandMs ?? 0,
       autoNextAt: this.autoNextAt ?? null,
@@ -975,8 +991,11 @@ export class Game extends EventEmitter {
         portrait: p.media?.portrait,
         winPortrait: p.media?.win,
         losePortrait: p.media?.lose,
+        seatArt: p.media?.seat,
+        dealerArt: p.media?.dealer,
         portraitPos: p.portraitPos,
         persona: p.kind === 'ai' ? p.persona : undefined,
+        key: p.kind === 'ai' ? p.key : undefined,
         faceFocus: p.faceFocus,
         portraitCredit: p.portraitCredit,
         portraitUrl: p.portraitUrl,

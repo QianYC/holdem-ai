@@ -2,7 +2,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { apiKey } from './ai.js';
+import { listModels, routeOf } from './ai.js';
 import { IMG_EXT, scanArt } from './game.js';
 
 const MIME_EXT = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp', 'image/gif': '.gif' };
@@ -106,14 +106,24 @@ export function createSettingsApi({ root, publicDir, config, game, log, savePath
     return game.setAutoNext(body.ms);
   }
 
+  // Models of the default endpoint plus every extra provider (llm.providers).
   async function models() {
-    const res = await fetch(`${config.llm.baseUrl.replace(/\/$/, '')}/models`, {
-      headers: { authorization: `Bearer ${apiKey(config.llm)}` },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!res.ok) return { ok: false, error: `接口返回 HTTP ${res.status}` };
-    const body = await res.json();
-    return { ok: true, models: (body.data ?? []).map((m) => m.id).filter(Boolean).sort() };
+    let list;
+    try {
+      list = await listModels(config.llm, routeOf(config.llm, null));
+    } catch (e) {
+      return { ok: false, error: `接口返回 ${e.message}` };
+    }
+    const providers = {};
+    const errors = {};
+    for (const name of Object.keys(config.llm.providers ?? {})) {
+      try {
+        providers[name] = await listModels(config.llm, routeOf(config.llm, { provider: name }));
+      } catch (e) {
+        errors[name] = String(e?.message ?? e);
+      }
+    }
+    return { ok: true, models: list, providers, errors };
   }
 
   function artDir(key) {

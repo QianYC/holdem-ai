@@ -4,7 +4,10 @@
 //   stickers/<id>.png   chat stickers                    (config.stickers[id].prompt, generated from the portrait)
 // Images are generated with config.imageModel through the OpenAI-compatible endpoint in config.llm.
 //
-// usage: node tools/art.mjs [portraits|poses|stickers|all] [key ...] [--force]
+//   seat.png / dealer.png  cut-outs for the start-page table scene (art.seat / scene.dealerPrompt)
+// public/scene/background.png + table.png: the room and the table layer (scene.background / scene.table)
+//
+// usage: node tools/art.mjs [portraits|poses|stickers|scene|all] [key ...] [--force]
 import fs from 'node:fs';
 import path from 'node:path';
 import { editImage, loadConfig, ROOT } from './lib.mjs';
@@ -113,7 +116,41 @@ function stickers() {
   return pool(jobs, 5);
 }
 
+// Start-page scene: transparent cut-outs of every character seated at the table, one of them as the dealer.
+function scene() {
+  const sc = cfg.scene ?? {};
+  const jobs = [];
+  const sceneDir = path.join(ROOT, 'public', 'scene');
+  fs.mkdirSync(sceneDir, { recursive: true });
+  const bg = path.join(sceneDir, 'background.png');
+  if ((!findImg(sceneDir, 'background') || force) && sc.background && !keys.length)
+    jobs.push({ name: 'scene/background', run: async () => fs.writeFileSync(bg, await editImage({ prompt: sc.background, size: '1536x1024' })) });
+  const table = path.join(sceneDir, 'table.png');
+  if ((!fs.existsSync(table) || force) && sc.table && !keys.length)
+    jobs.push({ name: 'scene/table', run: async () => fs.writeFileSync(table, await editImage({ prompt: sc.table, size: '1536x1024', background: 'transparent' })) });
+  for (const a of chars) {
+    const dir = dirOf(a);
+    const ref = findImg(dir, 'portrait');
+    if (!ref) continue;
+    const dealer = a.key === sc.dealer;
+    const out = path.join(dir, dealer ? 'dealer.png' : 'seat.png');
+    if (fs.existsSync(out) && !force) continue;
+    const pose = dealer
+      ? sc.dealerPrompt
+      : `She is seated at a casino poker table, seen from the front at waist level, as if her forearms rest on the table edge (do not draw the table). ${a.art?.seat ?? 'A stylish casino-night outfit in her own colors; she holds two playing cards.'} Upper body only, down to the hips; nothing below.`;
+    const prompt = [
+      'Same character as the reference image: keep her face, hair, horns/accessories, colors and the anime gacha art style. Adult woman with adult proportions.',
+      a.art?.look ?? '',
+      pose,
+      'Transparent background, no table, no chair, no floor, no shadow, clean anime lineart, soft cel shading, no text. Tasteful and non-sexual.',
+    ].join(' ');
+    jobs.push({ name: `${a.key}/${dealer ? 'dealer' : 'seat'}`, run: async () => fs.writeFileSync(out, await editImage({ prompt, ref, size: '1024x1536', background: 'transparent' })) });
+  }
+  return pool(jobs, 5);
+}
+
 if (stage === 'portraits' || stage === 'all') await portraits();
 if (stage === 'poses' || stage === 'all') await poses();
 if (stage === 'stickers' || stage === 'all') await stickers();
+if (stage === 'scene' || stage === 'all') await scene();
 console.log('done. Large stickers can be shrunk with: powershell -File tools/shrink.ps1 (Windows)');

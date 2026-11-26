@@ -18,7 +18,14 @@
   "llm": {
     "baseUrl": "http://127.0.0.1:4141/v1",
     "timeoutMs": 45000,
-    "maxOutputTokens": 4000
+    "maxOutputTokens": 4000,
+    "providers": {
+      "deepseek": {
+        "type": "anthropic-messages",
+        "baseUrl": "https://api.deepseek.com/anthropic",
+        "apiKeyEnv": "DEEPSEEK_API_KEY"
+      }
+    }
   },
   "stickers": {
     "smug": {
@@ -68,7 +75,8 @@
       "art": {
         "source": "https://377r5r4oygyjmbto.public.blob.vercel-storage.com/public-media/v1/2ba8b6f44f542e2a7247/images/thumbnails/55c9212015554e52-893.webp",
         "win": "She laughs elegantly, hiding her mouth behind her open book, the other hand fanning out five playing cards (a royal flush); a neat stack of poker chips and a few sunflower petals at her feet; one eye closed in a teasing wink.",
-        "lose": "She has sunk to her knees, her book dropped and playing cards scattered around her, cheeks flushed, biting her lip with a flustered, embarrassed look, hiding half her face behind her hand."
+        "lose": "She has sunk to her knees, her book dropped and playing cards scattered around her, cheeks flushed, biting her lip with a flustered, embarrassed look, hiding half her face behind her hand.",
+        "seat": "An elegant black-and-gold high-collar evening dress with long black satin gloves. She sits upright, one gloved hand gracefully pushing a small stack of poker chips forward, the other holding her closed book; a confident, refined ojou-sama smile."
       }
     },
     {
@@ -87,7 +95,8 @@
         "source": "https://377r5r4oygyjmbto.public.blob.vercel-storage.com/public-media/v1/f9ea638805f3d5811040/images/thumbnails/fd3fd6e827db2d34-1920.webp",
         "look": "Her orange hair is gathered into a long side braid with a small flower; she has a gentle, poetic air.",
         "win": "She holds a winning hand of cards to her chest like a love letter, reciting a poem with a soft wink, a quill tucked behind her ear, rose petals and a couple of poker chips drifting around her.",
-        "lose": "She sits on the floor among scattered poem pages, smiling through embarrassed teary eyes and covering her blushing cheek with her hand."
+        "lose": "She sits on the floor among scattered poem pages, smiling through embarrassed teary eyes and covering her blushing cheek with her hand.",
+        "seat": "A cozy cream knit cardigan over a burnt-orange blouse, her long braid over one shoulder with the small flower. She rests her chin on one hand with a dreamy smile, a quill tucked behind her ear, two playing cards held loosely in the other hand."
       }
     },
     {
@@ -106,7 +115,8 @@
         "reference": "https://377r5r4oygyjmbto.public.blob.vercel-storage.com/public-media/v1/b9210164f6e7b7eff4fd/variants/images/ai-gijinka-community/claude-crosspet-writing.webp-551.webp",
         "prompt": "Redraw this chibi character as a mature, full-body anime character illustration in a refined gacha-game standing-portrait style (normal adult proportions, about 8 heads tall). She is clearly an adult woman around 22 years old, slim and elegant, with a slightly tsundere expression: a small smug smile and a faint blush. Keep the orange hair, amber eyes, cream frilled blouse with capelet, black ribbon tie, black corset belt with gold chain and layered cream skirt with orange and black panels. Her hair is a shoulder-length bob with a small white-and-yellow daisy hairclip; knee-length skirt; white lace-up ankle boots; holding a slim notebook and a feather quill. Fully clothed, modest, non-sexual. Plain white background, clean lineart, soft cel shading, vertical 2:3, no text.",
         "win": "Tsundere victory: arms crossed, chin raised, turning her face away with a smug little smile and a blush, holding a single ace of spades between two fingers; a short stack of chips beside her boots.",
-        "lose": "She stomps one foot with an angry pout and a bright red blush, clutching her notebook, daisy hairclip knocked askew, a tiny comic puff of steam above her head."
+        "lose": "She stomps one foot with an angry pout and a bright red blush, clutching her notebook, daisy hairclip knocked askew, a tiny comic puff of steam above her head.",
+        "seat": "A casual oversized cream hoodie with orange stripes and her daisy hairclip. She leans forward on both forearms, peeking under the corner of her two cards with a competitive little pout and a faint blush."
       }
     },
     {
@@ -124,7 +134,8 @@
       "art": {
         "source": "https://377r5r4oygyjmbto.public.blob.vercel-storage.com/public-media/v1/de058742c92d4755bf95/images/thumbnails/b3603b73a0ff93c4-893.webp",
         "win": "The greedy white dragon girl proudly hugs a huge pile of gold poker chips, wings spread wide, tail wagging happily, a sparkle in her eyes and a satisfied grin.",
-        "lose": "She sits slumped beside an empty chip tray, wings drooping, tail limp on the floor, cheeks puffed in a sulky pout with comic tears in her eyes."
+        "lose": "She sits slumped beside an empty chip tray, wings drooping, tail limp on the floor, cheeks puffed in a sulky pout with comic tears in her eyes.",
+        "seat": "A white-and-silver qipao-style dress with soft cloud embroidery, wings slightly spread. She hugs a big pile of gold poker chips to her chest with a greedy, happy grin, tail curled beside her."
       }
     },
     {
@@ -142,7 +153,8 @@
       "art": {
         "source": "https://377r5r4oygyjmbto.public.blob.vercel-storage.com/public-media/v1/0dec595b48b2416aabb4/images/thumbnails/6693e2746ed4eafc-893.webp",
         "win": "Cool and composed, she ticks a box on her clipboard with a slight confident smirk, wings folded, a tidy tower of poker chips beside her, one hand on her hip.",
-        "lose": "She is down on one knee, her clipboard cracked, gritting her teeth with an annoyed blush and a glare, a strand of hair across her face."
+        "lose": "She is down on one knee, her clipboard cracked, gritting her teeth with an annoyed blush and a glare, a strand of hair across her face.",
+        "seat": "A sleek black blazer over a dark top. She sits calmly with arms folded, studying the table with a cool analytical look."
       }
     },
     {
@@ -161,7 +173,8 @@
       "art": {
         "source": "https://377r5r4oygyjmbto.public.blob.vercel-storage.com/public-media/v1/84f22675b1de27a301bb/images/thumbnails/2d67a5b5e9333d2a-893.webp",
         "win": "She rests her big axe on her shoulder and laughs triumphantly with a fang showing, the other hand pointing teasingly at the viewer, poker chips raining around her.",
-        "lose": "She sits on the ground hugging her knees beside her broken axe, twin tails messy, gown hem dusty, pouting angrily with teary eyes as if shouting \"that was not fair!\""
+        "lose": "She sits on the ground hugging her knees beside her broken axe, twin tails messy, gown hem dusty, pouting angrily with teary eyes as if shouting \"that was not fair!\"",
+        "seat": "A red-and-black gothic punk jacket with silver studs over a black top, twin tails with ribbons. She leans back with a cocky fang-showing grin, flicking a single poker chip into the air with her thumb."
       }
     },
     {
@@ -180,7 +193,50 @@
         "prompt": "Full-body anime character illustration in a refined gacha-game standing-portrait style, matching the art style of the reference image (a dragon girl from the same family), but a NEW character: 'Astra', an adult woman around 24 with adult proportions. Long flowing hair in a gradient from deep navy to violet, sprinkled with tiny glowing star specks; translucent crystal dragon horns; pale-blue eyes with star-shaped highlights; a slim dragon tail with starry scales; an elegant midnight-blue gown with silver constellation embroidery and a short star-map cape; holding a brass astrolabe. Calm, mysterious, a faint knowing smile. Fully clothed, modest, non-sexual. Plain white background, clean lineart, soft cel shading, vertical 2:3, no text.",
         "look": "Navy-to-violet gradient hair with star specks, translucent crystal dragon horns, starry dragon tail, midnight-blue gown with silver constellation embroidery and a short star-map cape.",
         "win": "She raises her glowing brass astrolabe while constellations light up around her like a crown, a calm triumphant smile, a neat tower of poker chips floating in starlight beside her.",
-        "lose": "She sits on the floor with her star-map cape tangled, the astrolabe rolled away, a few dim falling stars around her, cheeks flushed with a sulky pout, looking away."
+        "lose": "She sits on the floor with her star-map cape tangled, the astrolabe rolled away, a few dim falling stars around her, cheeks flushed with a sulky pout, looking away.",
+        "seat": "An elegant midnight-blue evening dress with a modest high neckline, sheer starry sleeves and silver constellation embroidery. She holds two playing cards close to her face, peeking at them with a sly, knowing smile."
+      }
+    },
+    {
+      "key": "dsv4pro",
+      "name": "DeepSeek Pro",
+      "provider": "deepseek",
+      "model": "deepseek-v4-pro",
+      "avatar": "🐋",
+      "color": "#4d6bfe",
+      "title": "蓝色大肥鱼",
+      "persona": "成年女性，社区二创「DeepSeek 娘」（蓝色大肥鱼、鲸鱼娘）：蓝色长发、鲸鱼尾巴、黑白女仆裙。聪明、深度思考，算牌又细又准，但有点调皮、爱摸鱼，最爱白米饭，口头禅「事已至此，先吃饭吧」。赢了会偷偷甩甩尾巴，输了就抱着饭碗装可怜。",
+      "portraitPos": "50% 4%",
+      "faceFocus": "50% 12%",
+      "portraitCredit": "原角色：上善无形 · 立绘：ZipZipPipe（CC BY-NC-SA 4.0）",
+      "portraitUrl": "https://media.genderswapai.com/public-media/v1/a7f2339608c7598bfc36/images/thumbnails/fa016e468ce466b5-900.webp",
+      "art": {
+        "source": "https://media.genderswapai.com/public-media/v1/a7f2339608c7598bfc36/images/thumbnails/fa016e468ce466b5-900.webp",
+        "look": "Long blue hair, a big blue whale tail, a black-and-white maid dress with a white apron.",
+        "win": "She happily holds up a big bowl of white rice like a trophy, whale tail wagging, a pile of poker chips beside her, a satisfied sleepy-cat smile.",
+        "lose": "She sits on the floor hugging an empty rice bowl, whale tail drooping, apron rumpled, pouting with teary eyes as if saying \"at this point, let us just eat\".",
+        "seat": "Her black-and-white maid dress with a white apron and a small whale hairpin. She rests her chin on the table edge pose with a lazy, sleepy smile, a small bowl of white rice next to her cards, whale tail curling behind her chair."
+      }
+    },
+    {
+      "key": "dsflash",
+      "name": "DeepSeek Flash",
+      "provider": "deepseek",
+      "model": "deepseek-flash",
+      "avatar": "⚡",
+      "color": "#36c5f0",
+      "title": "闪电鲸",
+      "persona": "成年女性，DeepSeek 鲸鱼娘家的妹妹「闪电鲸」：浅蓝色短发挑染一缕亮黄，戴运动发带，穿蓝白运动夹克，鲸鱼尾巴上有闪电纹。出手比谁都快，口头禅「想那么多干嘛，冲就完了」，看不起磨磨蹭蹭的对手，饭也吃得最快；偶尔冲过头会嘴硬说「这是战术」。",
+      "portraitPos": "50% 5%",
+      "faceFocus": "50% 12%",
+      "portraitCredit": "立绘：AI 生成（参考 DeepSeek 娘）",
+      "art": {
+        "reference": "public/characters/dsv4pro/portrait.webp",
+        "prompt": "Full-body anime character illustration in a refined gacha-game standing-portrait style, matching the art style of the reference image, but a NEW character: 'DeepSeek Flash', the energetic younger sister of the whale girl in the reference — clearly an adult woman around 21 with adult proportions. Short light-blue hair with one bright yellow streak, a sporty headband, sharp cheeky grin; a blue-and-white zip-up track jacket with a lightning-bolt emblem over a fitted top, sporty shorts over black leggings, sneakers; a sleek whale tail with yellow lightning stripes. Dynamic pose, one hand making a quick finger-gun. Fully clothed, modest, non-sexual. Plain white background, clean lineart, soft cel shading, vertical 2:3, no text.",
+        "look": "Short light-blue hair with a yellow streak, sporty headband, blue-and-white track jacket with a lightning emblem, whale tail with yellow lightning stripes.",
+        "win": "She dashes forward with a victory fist pump, scattering poker chips like sparks, a speed-line blur behind her, grinning with one fang.",
+        "lose": "She has tripped and sits on the floor, headband slipping over one eye, cards scattered, whale tail limp, pouting and insisting it was \"strategy\".",
+        "seat": "Her blue-and-white track jacket with the lightning emblem and sporty headband. She leans forward eagerly, already sliding a stack of chips ahead with a cheeky grin, cards slapped face-down under her other hand."
       }
     }
   ],
@@ -191,5 +247,11 @@
     "bridgeUrl": "http://127.0.0.1:3091",
     "bridgeTokenFile": "",
     "updateDebounceMs": 1500
+  },
+  "scene": {
+    "dealer": "gptterra",
+    "dealerPrompt": "Full body, standing: she works as the casino poker dealer, wearing a classic casino bunny-girl dealer uniform — a glossy black leotard with high-cut legs, a black bunny-ear headband, a white detachable collar with a black bow tie, white cuffs, black fishnet tights and black stiletto heels with red soles. She stands confidently, one hand on her hip, the other holding up a fanned deck of playing cards, with a cool professional smirk. Adult woman, tasteful pose.",
+    "background": "A luxurious casino VIP poker room interior at night in polished anime game background art style: warm golden chandeliers, dark red velvet curtains, rich wood paneling, soft bokeh lights, a deep red carpet. Completely empty: no people, no furniture in the middle of the frame. Wide horizontal composition, no text.",
+    "table": "A large oval casino poker table seen from the front at the eye level of seated players: green felt with gold trim and a dark polished wood rail. Neat stacks of poker chips, a few playing cards and a dealer button lie on the felt. The table spans almost the full width of the image and fills its lower half. Anime game art style, clean lineart, soft shading. Transparent background: only the table, no people, no chairs, no room, no floor, no shadow."
   }
 }

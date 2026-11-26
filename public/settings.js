@@ -7,6 +7,7 @@ let art = {};
 let hasApiKey = false;
 let maxAi = 9;
 let models = [];
+let providerModels = {}; // extra providers (llm.providers): name -> model ids
 let tab = 'game';
 let open = null; // index of the expanded AI card
 const jobs = {}; // key -> {id, stage, status}
@@ -61,8 +62,11 @@ function family(m) {
   const head = id.split(/[-_.\d]/)[0];
   return head || '其他';
 }
-function modelSelect(label, pathStr, { kind = 'chat' } = {}) {
-  const value = String(get(draft, pathStr) ?? '');
+function modelSelect(label, pathStr, { kind = 'chat', withProviders = false } = {}) {
+  // AI seats may use another provider: the option value is then "provider::model".
+  const base = pathStr.replace(/\.model$/, '');
+  const prov = withProviders ? get(draft, `${base}.provider`) : null;
+  const value = prov ? `${prov}::${get(draft, pathStr) ?? ''}` : String(get(draft, pathStr) ?? '');
   const list = models.filter(kind === 'image' ? isImageModel : isChatModel);
   const all = value && !list.includes(value) ? [value, ...list] : list;
   const groups = new Map();
@@ -71,9 +75,14 @@ function modelSelect(label, pathStr, { kind = 'chat' } = {}) {
     if (!groups.has(f)) groups.set(f, []);
     groups.get(f).push(m);
   }
-  const opts = [...groups]
+  let opts = [...groups]
     .map(([f, ms]) => `<optgroup label="${esc(f)}">${ms.map((m) => `<option value="${esc(m)}" ${m === value ? 'selected' : ''}>${esc(m)}</option>`).join('')}</optgroup>`)
     .join('');
+  if (withProviders)
+    for (const [name, ids] of Object.entries(providerModels)) {
+      const all = prov === name && !ids.includes(get(draft, pathStr)) ? [get(draft, pathStr), ...ids] : ids;
+      opts += `<optgroup label="${esc(name)}（独立提供方）">${all.map((m) => `<option value="${esc(`${name}::${m}`)}" ${`${name}::${m}` === value ? 'selected' : ''}>${esc(m)}</option>`).join('')}</optgroup>`;
+    }
   const hint = models.length ? '' : '<small>还没读到模型列表：到「模型接口」页点「测试连接」</small>';
   return `<label class="sf">${label}<select data-model="${pathStr}">${value ? '' : '<option value="" selected>（请选择）</option>'}${opts}<option value="${CUSTOM}">✎ 自定义模型 id…</option></select>${hint}</label>`;
 }
@@ -131,7 +140,7 @@ function aiCard(a, i) {
     <div class="aihead">
       ${field('', `ai.${i}.avatar`, { attrs: 'class="emo" maxlength="4" title="没有立绘时的头像"' })}
       ${field('名字', `ai.${i}.name`)}
-      ${modelSelect('模型', `ai.${i}.model`)}
+      ${modelSelect('模型', `ai.${i}.model`, { withProviders: true })}
       ${select('推理', `ai.${i}.reasoning`, [['', '默认'], ['low', 'low'], ['medium', 'medium'], ['high', 'high']])}
       ${field('颜色', `ai.${i}.color`, { type: 'color' })}
       <div class="aibtns">
@@ -240,6 +249,13 @@ function render() {
         v = prompt('输入模型 id（接口上的名字）', String(get(draft, el.dataset.model) ?? '')) ?? '';
         v = v.trim();
         if (!v) return render();
+      }
+      const base = el.dataset.model.replace(/\.model$/, '');
+      if (/^ai\.\d+\.model$/.test(el.dataset.model)) {
+        const [prov, id] = v.includes('::') ? v.split('::') : [null, v];
+        if (prov) set(draft, `${base}.provider`, prov);
+        else delete get(draft, base).provider;
+        v = id;
       }
       set(draft, el.dataset.model, v);
       status('有未保存的修改');
@@ -396,7 +412,10 @@ function pickAndUpload(key, slot, id) {
 
 async function loadModels() {
   const r = await api('/api/models');
-  if (r.ok) models = r.models;
+  if (r.ok) {
+    models = r.models;
+    providerModels = r.providers ?? {};
+  }
   return r;
 }
 
