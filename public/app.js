@@ -75,7 +75,7 @@ function playCues(prev, s) {
     const won = s.gameOver?.type === 'victory' && s.gameOver.subject === s.you;
     audio.sfx(won ? 'victory' : 'gameover');
   } else if (s.myOut && !prev.myOut) audio.sfx('gameover');
-  else if (s.knockout && !prev.knockout) audio.sfx('knockout');
+  else if ((s.knockouts?.length ?? 0) > (prev.knockouts?.length ?? 0)) audio.sfx('knockout');
   else if (s.status === 'handOver' && prev.status === 'playing' && s.you >= 0 && s.result?.won?.[s.you] > 0) audio.sfx('win');
 }
 
@@ -485,8 +485,7 @@ function artHtml(p, posed) {
   return `<img src="${esc(pose)}" alt="" style="object-position:${posed ? '50% 30%' : pos(p.portraitPos, '50% 0%')}">`;
 }
 
-function renderKnockout(s) {
-  const k = s.knockout;
+function renderKnockout(s, k) {
   const key = `ko-${s.gameId}-${k.handNo}-${k.seat}`;
   if (overDismissed === key) return hideOver();
   const p = s.players[k.seat];
@@ -565,8 +564,72 @@ function renderKnockout(s) {
   });
 }
 
+// Several characters busted in the same hand: one screen, one K.O. card each.
+function renderKnockouts(s) {
+  const ks = s.knockouts;
+  const key = `ko-${s.gameId}-${ks[0].handNo}-${ks.map((k) => k.seat).join('.')}`;
+  if (overDismissed === key) return hideOver();
+  const classic = ks[0].style === 'classic';
+  const alive = s.players.filter(inPlay).length;
+  const left = s.autoNextAt ? secondsLeft(s.autoNextAt) : null;
+  const cards = ks
+    .map((k) => {
+      const p = s.players[k.seat];
+      const winner = s.players[k.by ?? 0];
+      const byYou = isMe(winner);
+      const winnerName = esc(nameOf(winner) || '对手');
+      return `<div class="ko-card" style="--c:${col(p.color, '#e0559b')}">
+        <div class="card-portrait knocked">
+          <div class="art">${artHtml(p, p.losePortrait)}</div>
+          <div class="stamp">K.O.</div>
+          <div class="nm">${esc(p.name)}</div>
+          <div class="tt">${esc(p.title ?? '')}</div>
+          <div class="md">${esc(p.model ?? '')}</div>
+        </div>
+        <div class="ko-info">
+          <div class="ko-who">${byYou ? '被<b>你</b>拿下了♡' : `被 <b style="color:${col(winner?.color, '#fff')}">${winnerName}</b> 淘汰`} · 第 ${k.place} / ${k.players} 名</div>
+          <div class="bubble-big">${k.line ? `「${esc(k.line)}」` : '<span class="thinking-dots">正在组织语言</span>'}</div>
+          ${k.reward ? `<div class="penalty"><span>🎁 胜者奖励</span>${esc(k.reward)}</div>` : ''}
+          ${
+            k.theirHole
+              ? `<div class="showdown mini"><div class="cards">${smallCards(k.theirHole)}</div><span class="vs">vs</span><div class="cards">${smallCards(k.myHole)}</div></div>
+                 <div class="mini-stats">她的 <b>${esc(k.theirHand ?? '')}</b> 输给了 ${winnerName} 的 <b>${esc(k.myHand ?? '')}</b></div>`
+              : ''
+          }
+        </div>
+      </div>`;
+    })
+    .join('');
+  const box = `
+    <div class="box multi-ko">
+      <div class="title">${classic ? `K.O. ×${ks.length}` : `这一手 ${ks.length} 人出局！`}</div>
+      <div class="subtitle">第 ${ks[0].handNo} 手 · 公共牌 <span class="board-mini">${smallCards(ks[0].board)}</span> · 场上还剩 ${alive} 人${left != null ? ` · <span class="autoLeft">${left}</span> 秒后自动继续` : ''}</div>
+      <div class="ko-grid" style="--n:${ks.length}">${cards}</div>
+      <div class="actions">
+        <button class="ghost" id="overClose">看看牌桌</button>
+        ${s.isHost ? `<button class="${classic ? 'gold' : 'pink'}" id="overNext">${classic ? '▶ 继续下一手' : '💗 继续下一手'}</button>` : ''}
+      </div>
+    </div>`;
+  mountOver({
+    key,
+    sig: JSON.stringify([ks.map((k) => [k.line, k.reward]), s.autoNextAt, s.isHost]),
+    cls: classic ? 'over victory' : 'over flirty',
+    box,
+    symbols: classic ? ['🪙', '👑', '✨', '🎉', '💰'] : ['💗', '💋', '🌹', '💕', '✨', '🪙'],
+    bind: () => {
+      if (s.autoNextAt) startCountdown(s.autoNextAt);
+      if ($('overNext'))
+        $('overNext').onclick = () => {
+          overDismissed = key;
+          renderOver(S);
+          post('/api/next');
+        };
+    },
+  });
+}
+
 function renderOver(s) {
-  if (s.status === 'handOver' && s.knockout) return renderKnockout(s);
+  if (s.status === 'handOver' && s.knockouts?.length) return s.knockouts.length > 1 ? renderKnockouts(s) : renderKnockout(s, s.knockouts[0]);
   // A personal defeat (you are out while other people play on) uses the same screen.
   const personal = s.status !== 'gameOver' && s.myOut ? s.myOut : null;
   const g = personal ?? s.gameOver;

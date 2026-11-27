@@ -616,3 +616,30 @@ table.stats td.bar div { height: 8px; border-radius: 4px; opacity: .85; }
 table.stats tr.human td { color: #c9d1d9; }
 table.stats tr.total td { border-top: 1px solid var(--line); font-weight: 600; }
 table.stats .bad { color: #f85149; }
+
+/* ---------- several K.O. at once ---------- */
+.over .box.multi-ko { width: min(1500px, 96vw); text-align: center; }
+.multi-ko .title { white-space: normal; }
+.multi-ko .subtitle { margin-bottom: 14px; }
+.multi-ko .board-mini { display: inline-flex; gap: 3px; vertical-align: middle; }
+.ko-grid { display: grid; grid-template-columns: repeat(min(var(--n), 4), minmax(0, 1fr)); gap: 18px; align-items: start; }
+.ko-card { display: flex; flex-direction: column; align-items: center; gap: 10px; min-width: 0; }
+.ko-card .card-portrait { width: min(100%, 220px); height: clamp(170px, 30vh, 320px); flex: none; }
+.ko-info { width: 100%; display: flex; flex-direction: column; gap: 8px; text-align: left; }
+.ko-who { font-size: 14px; color: #f7d6ea; text-align: center; }
+.ko-info .bubble-big { font-size: 16px; padding: 10px 14px; }
+.ko-info .penalty { font-size: 13px; }
+.ko-info .showdown.mini, .ko-info .mini-stats { justify-content: center; text-align: center; }
+@media (max-width: 900px) { .ko-grid { grid-template-columns: repeat(min(var(--n), 2), minmax(0, 1fr)); } }
+/* long names / titles / lines are shown in full (no clipping) */
+.over.flirty .ko-box .title { white-space: normal; }
+.card-portrait { display: flex; flex-direction: column; justify-content: flex-end; padding: 0 16px 10px; }
+.card-portrait .nm, .card-portrait .tt, .card-portrait .md { position: relative; left: auto; right: auto; bottom: auto; white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.35; }
+.card-portrait .tt { margin-top: 2px; }
+.card-portrait .md { margin-top: 2px; }
+.bubble-big { overflow-wrap: anywhere; }
+.over .multi-ko .title, .over.flirty .multi-ko .title, .over .multi-ko .subtitle, .over.flirty .multi-ko .subtitle { text-align: center; padding-right: 0; }
+.multi-ko .subtitle { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px; }
+.multi-ko .ko-grid { gap: 14px; }
+.multi-ko .ko-info { gap: 6px; }
+.over .multi-ko .actions, .over.flirty .multi-ko .actions { justify-content: center; margin-top: 12px; }

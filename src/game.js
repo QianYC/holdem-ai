@@ -200,7 +200,7 @@ export class Game extends EventEmitter {
       spectating: this.spectating || undefined,
       spectatePaused: this.spectatePaused || undefined,
       gameOver: this.gameOver ?? undefined,
-      knockout: this.status === 'handOver' ? (this.knockout ?? undefined) : undefined,
+      knockouts: this.status === 'handOver' && this.knockouts.length ? this.knockouts : undefined,
       lastResult: this.lastResult ?? undefined,
       eliminations: this.eliminations?.length ? this.eliminations : undefined,
       players: t.players.map((p) => ({
@@ -281,13 +281,12 @@ export class Game extends EventEmitter {
       this.gameOver = snap.gameOver ?? null;
       this.spectating = Boolean(snap.spectating);
       this.spectatePaused = Boolean(snap.spectatePaused);
-      this.knockout = snap.knockout ?? null;
+      this.knockouts = snap.knockouts ?? (snap.knockout ? [snap.knockout] : []);
       this.lastResult = snap.lastResult ?? null;
       this.eliminations = snap.eliminations ?? [];
       const go = this.gameOver;
       if (go && go.taunt == null) this.requestTaunt(go, go.type === 'champion' ? this.human : t.players[go.subject]);
-      const k = this.knockout;
-      if (k && !k.line && t.players[k.seat]) this.requestKnockoutLine(t.players[k.seat], k, false);
+      for (const k of this.knockouts) if (!k.line && t.players[k.seat]) this.requestKnockoutLine(t.players[k.seat], k, false);
       this.log(`[game] restored table after hand ${t.handNo}`);
     } catch (e) {
       this.log(`[game] cannot restore table: ${e}`);
@@ -362,7 +361,7 @@ export class Game extends EventEmitter {
     this.lastResult = null;
     this.gameOver = null;
     this.eliminations = [];
-    this.knockout = null;
+    this.knockouts = [];
     this.blinds = null;
     this.spectating = false;
     this.spectatePaused = false;
@@ -705,7 +704,7 @@ export class Game extends EventEmitter {
     this.status = 'playing';
     this.lastResult = null;
     this.eliminations = [];
-    this.knockout = null;
+    this.knockouts = [];
     const table = this.table;
     const before = table.handNo;
     const run = table
@@ -820,7 +819,7 @@ export class Game extends EventEmitter {
     let ms = this.spectating ? (this.spectatePaused ? 0 : (this.config.spectateDelayMs ?? 3000)) : (this.config.autoNextHandMs ?? 0);
     if (!ms || this.status !== 'handOver' || (!this.spectating && !this.table.players.some((p) => p.kind === 'human' && p.stack > 0 && !p.sittingOut))) return;
     // Leave time to read a defeat screen before the next hand starts.
-    if (this.knockout) ms = Math.max(ms, this.config.knockoutDelayMs ?? 12000);
+    if (this.knockouts.length) ms = Math.max(ms, (this.config.knockoutDelayMs ?? 12000) + (this.knockouts.length - 1) * 5000);
     const no = this.table.handNo;
     this.autoNextAt = Date.now() + ms;
     this.autoTimer = setTimeout(() => {
@@ -937,9 +936,8 @@ export class Game extends EventEmitter {
     const isHuman = (p) => p?.kind === 'human';
     const bustedHumans = busted.filter(isHuman);
     const humansAlive = t.players.filter((p) => isHuman(p) && alive(p));
-    // One defeat screen per hand: prefer an AI a human knocked out.
-    const shown = busted.filter((p) => p.kind === 'ai').sort((a, b) => (isHuman(t.players[b.eliminatedBy]) ? 1 : 0) - (isHuman(t.players[a.eliminatedBy]) ? 1 : 0))[0];
-    if (shown && !bustedHumans.length && remaining > 1) this.knockOut(shown);
+    // Every AI busted this hand gets a K.O. card (shown together on one screen): best place first.
+    if (!bustedHumans.length && remaining > 1) for (const p of busted.filter((x) => x.kind === 'ai').sort((a, b) => a.place - b.place)) this.knockOut(p);
     if (bustedHumans.length && !humansAlive.length && !this.spectating) {
       // The last human is out: the game is over for the people at the table (they may watch the AIs finish).
       this.finish('defeat', bustedHumans.sort((a, b) => a.place - b.place)[0]);
@@ -1043,7 +1041,7 @@ export class Game extends EventEmitter {
       line: null,
       reward: null,
     };
-    this.knockout = k;
+    this.knockouts.push(k);
     this.requestKnockoutLine(p, k, true);
   }
 
@@ -1060,7 +1058,7 @@ export class Game extends EventEmitter {
         this.trimTalk();
       }
       this.save();
-      if (this.knockout !== k) return;
+      if (!this.knockouts.includes(k)) return;
       this.emit('knockout', k);
       this.changed();
     });
@@ -1091,7 +1089,7 @@ export class Game extends EventEmitter {
         `${role}${situation}${ask}\n只输出 JSON：${withReward ? '{"say": "...", "reward": "..."}' : '{"say": "..."}'}`,
         this.table.players.length,
       );
-      return { line: cleanLine(d.say, 80) ?? fallback.line, reward: withReward ? (cleanLine(d.reward, 60) ?? fallback.reward) : undefined };
+      return { line: cleanLine(d.say, 120) ?? fallback.line, reward: withReward ? (cleanLine(d.reward, 60) ?? fallback.reward) : undefined };
     } catch (e) {
       this.log(`[game] knockout line failed: ${e?.message ?? e}`);
       return fallback;
@@ -1291,7 +1289,7 @@ export class Game extends EventEmitter {
       })),
       eliminations: this.eliminations,
       gameOver: this.gameOver,
-      knockout: this.status === 'handOver' ? this.knockout : null,
+      knockouts: this.status === 'handOver' ? this.knockouts : [],
       eliminationMode: this.eliminationMode(),
       spectating: this.spectating,
       spectatePaused: this.spectatePaused,
