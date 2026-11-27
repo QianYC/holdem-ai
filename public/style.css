@@ -643,3 +643,24 @@ table.stats .bad { color: #f85149; }
 .multi-ko .ko-grid { gap: 14px; }
 .multi-ko .ko-info { gap: 6px; }
 .over .multi-ko .actions, .over.flirty .multi-ko .actions { justify-content: center; margin-top: 12px; }
+
+/* ---------- K.O. scene (knocked-out cut-outs in the casino room) ---------- */
+.over.ko-scene-over { padding: 0; overflow: hidden; }
+.over .box.ko-scene { position: fixed; inset: 0; width: auto; max-width: none; margin: 0; z-index: 2; }
+.ko-scene .scene-bg { filter: brightness(.45) saturate(1.1) hue-rotate(-12deg); }
+.ko-vignette { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 70%, rgba(255, 80, 160, .18), transparent 55%), radial-gradient(ellipse at 50% 50%, transparent 40%, rgba(10, 0, 10, .75)); pointer-events: none; }
+.ko-stage { top: 50%; }
+.ko-stage .ko-table { top: 4%; opacity: .55; filter: blur(1.5px) brightness(.7); z-index: 1; }
+.ko-stage .sprite.ko { z-index: 10; }
+.ko-say { position: absolute; transform: translateX(-50%); z-index: 20; background: #fff; color: #3a0b2c; border-radius: 16px; padding: 9px 13px; font-size: clamp(12px, 1.15vw, 17px); font-weight: 700; line-height: 1.45; text-align: left; box-shadow: 0 8px 24px rgba(0, 0, 0, .45), 0 0 0 2px var(--c); overflow-wrap: anywhere; animation: pop .4s ease-out .4s both; }
+.ko-say::after { content: ""; position: absolute; top: 100%; left: 50%; margin-left: -8px; border: 8px solid transparent; border-top-color: #fff; }
+.ko-plate { position: absolute; bottom: 0; transform: translateX(-50%); z-index: 25; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 5px 12px; border-radius: 12px; background: rgba(13, 17, 23, .82); border: 1px solid var(--c); color: #e6edf3; font-size: 12px; white-space: nowrap; box-shadow: 0 6px 18px rgba(0, 0, 0, .5); }
+.ko-plate b { font-size: 15px; color: color-mix(in srgb, var(--c) 45%, #fff); }
+.ko-plate .rw { color: #ffd1e6; white-space: normal; text-align: center; max-width: 220px; }
+.ko-scene .scene-top .title { font-size: clamp(30px, 4.4vw, 60px); font-weight: 900; font-style: italic; color: #ff8fc4; text-shadow: 0 4px 24px rgba(255, 60, 150, .6); white-space: normal; text-align: center; padding: 0; }
+.ko-scene .scene-bottom { left: auto; right: 2.5vw; bottom: 3vh; align-items: flex-end; }
+.ko-scene .scene-bottom .actions { justify-content: flex-end; margin: 0; flex-direction: column; align-items: stretch; }
+.ko-tip-cards { display: flex; align-items: center; gap: 10px; margin: 8px 0 4px; font-size: 12px; color: #c9d1d9; }
+.ko-tip-cards .vs { color: #ff8fc4; font-weight: 800; }
+.ko-tip-board { font-size: 12px; color: #c9d1d9; margin-bottom: 6px; }
+.ko-tip-cards .cards, .ko-tip-board .cards { display: flex; gap: 3px; margin-bottom: 2px; }

@@ -13,6 +13,6 @@
 | Grok（金发小恶魔） | `grok/portrait.webp` | Grok 娘立绘，作者 **ZipZipPipe**，[来源](https://genderswapai.com/zh-CN/ai-gijinka/grok) |
 | Astra（星辉龙娘） | `astra/portrait.jpg` | AI 生成：按 GPT 龙娘家族设定原创的星空龙娘，用 gpt-image-2.5-flare 画成 |
 
-- 开始页的牌桌场景：`public/scene/`（房间、牌桌）以及每个角色的 `seat.png`（入座）/ `dealer.png`（荷官）都是 AI 生成的透明抠图（`npm run art -- scene`）。
+- 开始页的牌桌场景：`public/scene/`（房间、牌桌）以及每个角色的 `seat.png`（入座）/ `dealer.png`（荷官）/ `ko.png`（出局场景）都是 AI 生成的透明抠图（`npm run art -- scene`）。
 - 每个角色的 `win.jpg` / `lose.jpg`（胜利 / 战败姿势）和 `stickers/*.png`（表情包）都是用 gpt-image-2.5-flare 以对应立绘为参考生成的衍生图（`npm run art`）。
 - 社区二创形象的版权归原作者所有，这里仅用于非商业的同人游戏展示。如果你是作者并希望撤下，请开 issue，会第一时间移除。

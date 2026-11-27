@@ -168,6 +168,20 @@ function scene() {
     ].join(' ');
     jobs.push({ name: `${a.key}/${base}`, run: async () => writeImg(dir, base, '.png', await editImage({ prompt, ref, size: '1024x1536', background: 'transparent' })) });
   }
+  // Knocked-out cut-outs (ko.png) for the K.O. scene: full body, defeated, transparent.
+  for (const a of chars) {
+    const dir = dirOf(a);
+    const ref = findImg(dir, 'portrait');
+    if (!ref || (findImg(dir, 'ko') && !force)) continue;
+    const prompt = [
+      'Same character as the reference image: keep her face, hair, horns/accessories, outfit design, colors and the anime gacha art style. Adult woman with adult proportions.',
+      a.art?.look ?? '',
+      'Full body, a comedic "defeated" pose right after being knocked out of a poker game: flustered and sulky, outfit a little rumpled, hair slightly messy.',
+      a.art?.lose ?? 'She sits on the floor pouting with teary eyes, a few playing cards scattered around her.',
+      'Transparent background, no floor, no shadow, no furniture; only small props she holds or that lie right next to her. Clean anime lineart, soft cel shading, no text. Tasteful and non-sexual, fully clothed.',
+    ].join(' ');
+    jobs.push({ name: `${a.key}/ko`, run: async () => writeImg(dir, 'ko', '.png', await editImage({ prompt, ref, size: '1024x1536', background: 'transparent' })) });
+  }
   return pool(jobs, 5);
 }
 

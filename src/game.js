@@ -63,6 +63,7 @@ export function scanArt(publicDir, a, stickerMeta = {}) {
     lose: exists(a.losePortrait) ? a.losePortrait : find('lose'),
     seat: find('seat'),
     dealer: find('dealer'),
+    ko: find('ko'),
     stickers,
   };
 }
@@ -801,7 +802,7 @@ export class Game extends EventEmitter {
       p.stickers = [];
       if (p.kind !== 'ai' || !this.publicDir || !p.key) continue;
       const art = scanArt(this.publicDir, p, this.config.stickers);
-      p.media = { portrait: art.portrait, win: art.win, lose: art.lose, seat: art.seat, dealer: art.dealer };
+      p.media = { portrait: art.portrait, win: art.win, lose: art.lose, seat: art.seat, dealer: art.dealer, ko: art.ko };
       p.stickers = art.stickers;
     }
     try {
@@ -1259,6 +1260,7 @@ export class Game extends EventEmitter {
         losePortrait: p.media?.lose,
         seatArt: p.media?.seat,
         dealerArt: p.media?.dealer,
+        koArt: p.media?.ko,
         portraitPos: p.portraitPos,
         persona: p.kind === 'ai' ? p.persona : undefined,
         key: p.kind === 'ai' ? p.key : undefined,

@@ -564,6 +564,80 @@ function renderKnockout(s, k) {
   });
 }
 
+// K.O. scene: everyone busted this hand appears together in the casino room (transparent cut-outs, like the
+// start page), each with her parting line above her head; hover outlines her and shows the showdown.
+const KO_LAYOUT = { 1: [62, [50]], 2: [60, [32, 68]], 3: [57, [20, 50, 80]], 4: [52, [14, 38, 62, 86]] };
+function renderKnockoutScene(s) {
+  const ks = s.knockouts;
+  const key = `ko-${s.gameId}-${ks[0].handNo}-${ks.map((k) => k.seat).join('.')}`;
+  if (overDismissed === key) return hideOver();
+  const n = ks.length;
+  const [h, xs] = KO_LAYOUT[n] ?? [48, ks.map((_, i) => 9 + (82 * i) / (n - 1))];
+  const alive = s.players.filter(inPlay).length;
+  const left = s.autoNextAt ? secondsLeft(s.autoNextAt) : null;
+  const only = n === 1 ? s.players[ks[0].seat] : null;
+  const onlyByYou = only && isMe(s.players[ks[0].by]);
+  const title = only ? (onlyByYou ? `${esc(only.name)} 被你拿下了♡` : `${esc(only.name)} 出局了…`) : `这一手 ${n} 人出局！`;
+  const figs = ks
+    .map((k, i) => {
+      const p = s.players[k.seat];
+      const winner = s.players[k.by ?? 0];
+      const by = isMe(winner) ? '被<b>你</b>拿下了♡' : `被 <b style="color:${col(winner?.color, '#fff')}">${esc(nameOf(winner) || '对手')}</b> 淘汰`;
+      const x = xs[i];
+      const bw = Math.min(34, 92 / n);
+      return `
+        <img class="sprite ko" data-i="${i}" data-seat="${p.seat}" src="${esc(p.koArt)}" alt="${esc(p.name)}" style="--c:${col(p.color, '#ff6fae')};left:${x}%;bottom:2%;height:${h}%">
+        <div class="ko-say" style="left:${x}%;bottom:${h + 3}%;max-width:${bw}%;--c:${col(p.color, '#ff6fae')}">${k.line ? `「${esc(k.line)}」` : '<span class="thinking-dots">正在组织语言</span>'}</div>
+        <div class="ko-plate" style="left:${x}%;--c:${col(p.color, '#ff6fae')}"><b>${esc(p.name)}</b><span>${by} · 第 ${k.place} / ${k.players} 名</span>${k.reward ? `<span class="rw">🎁 ${esc(k.reward)}</span>` : ''}</div>`;
+    })
+    .join('');
+  const box = `
+    <div class="box ko-scene">
+      <img class="scene-bg" src="${esc(s.scene.background)}" alt="">
+      <div class="ko-vignette"></div>
+      <div class="stage ko-stage" id="koStage">
+        <img class="scene-table ko-table" src="${esc(s.scene.table)}" alt="">
+        ${figs}
+        <div class="scene-tip hidden" id="koTip"></div>
+      </div>
+      <div class="scene-top">
+        <div class="title">${title}</div>
+        <div class="start-sub">第 ${ks[0].handNo} 手 · 场上还剩 ${alive} 人${left != null ? ` · <span class="autoLeft">${left}</span> 秒后自动继续` : ''} · 鼠标移到她身上看这一手的牌</div>
+      </div>
+      <div class="scene-bottom">
+        <div class="actions">
+          <button class="ghost" id="overClose">看看牌桌</button>
+          ${s.isHost ? '<button class="pink" id="overNext">💗 继续下一手</button>' : ''}
+        </div>
+      </div>
+    </div>`;
+  const koTip = (img) => {
+    const k = ks[Number(img.dataset.i)];
+    const p = s.players[k.seat];
+    const winner = s.players[k.by ?? 0];
+    return `<div class="nm" style="color:${col(p.color, '#fff')}">${esc(p.name)} <span>${esc(p.title ?? '')}</span></div><div class="md">${esc(p.model ?? '')} · 第 ${k.place} / ${k.players} 名</div>
+      ${k.theirHole ? `<div class="ko-tip-cards"><div><div class="cards">${smallCards(k.theirHole)}</div>${esc(p.name)} · ${esc(k.theirHand ?? '')}</div><div class="vs">vs</div><div><div class="cards">${smallCards(k.myHole)}</div>${esc(nameOf(winner) || '对手')} · ${esc(k.myHand ?? '')}</div></div><div class="ko-tip-board"><div class="cards">${smallCards(k.board)}</div>公共牌</div>` : ''}
+      ${k.reward ? `<div class="ps">🎁 胜者奖励：${esc(k.reward)}</div>` : ''}`;
+  };
+  mountOver({
+    key,
+    sig: JSON.stringify([ks.map((k) => [k.line, k.reward]), s.autoNextAt, s.isHost]),
+    cls: 'over flirty ko-scene-over',
+    box,
+    symbols: ['💗', '💋', '🌹', '💕', '✨', '🪙'],
+    bind: () => {
+      if (s.autoNextAt) startCountdown(s.autoNextAt);
+      bindScene(s, $('koStage'), $('koTip'), koTip);
+      if ($('overNext'))
+        $('overNext').onclick = () => {
+          overDismissed = key;
+          renderOver(S);
+          post('/api/next');
+        };
+    },
+  });
+}
+
 // Several characters busted in the same hand: one screen, one K.O. card each.
 function renderKnockouts(s) {
   const ks = s.knockouts;
@@ -629,7 +703,11 @@ function renderKnockouts(s) {
 }
 
 function renderOver(s) {
-  if (s.status === 'handOver' && s.knockouts?.length) return s.knockouts.length > 1 ? renderKnockouts(s) : renderKnockout(s, s.knockouts[0]);
+  if (s.status === 'handOver' && s.knockouts?.length) {
+    const ks = s.knockouts;
+    if (ks[0].style !== 'classic' && s.scene && ks.every((k) => s.players[k.seat]?.koArt)) return renderKnockoutScene(s);
+    return ks.length > 1 ? renderKnockouts(s) : renderKnockout(s, ks[0]);
+  }
   // A personal defeat (you are out while other people play on) uses the same screen.
   const personal = s.status !== 'gameOver' && s.myOut ? s.myOut : null;
   const g = personal ?? s.gameOver;
@@ -868,10 +946,8 @@ function sceneSprite(p, i, n) {
     style="--c:${col(p.color, '#fff')};left:${x}%;bottom:${bottom}%;height:${h}%;z-index:${10 + Math.round(near * 10)}">`;
 }
 
-// Hover = the character under the cursor (alpha hit test on the cut-outs), outlined, with her persona.
-function bindScene(s) {
-  const stage = $('stage');
-  const tip = $('sceneTip');
+// Hover = the character under the cursor (alpha hit test on the cut-outs), outlined, with a tooltip.
+function bindScene(s, stage = $('stage'), tip = $('sceneTip'), tipHtml = personaTip) {
   const sprites = [...stage.querySelectorAll('.sprite')];
   const masks = new Map();
   for (const img of sprites) {
@@ -907,9 +983,7 @@ function bindScene(s) {
       stage.classList.toggle('hovering', Boolean(hot));
       if (hot) {
         hot.classList.add('hot');
-        const p = S.players[Number(hot.dataset.seat)];
-        const isDealer = hot.classList.contains('croupier');
-        tip.innerHTML = `<div class="nm" style="color:${col(p.color, '#fff')}">${esc(p.name)} <span>${esc(p.title ?? '')}${isDealer ? ' · 今晚的荷官' : ''}</span></div><div class="md">${esc(p.model ?? '')}</div>${p.persona ? `<div class="ps">${esc(p.persona)}</div>` : ''}`;
+        tip.innerHTML = tipHtml(hot);
         tip.classList.remove('hidden');
       } else tip.classList.add('hidden');
     }
@@ -927,6 +1001,12 @@ function bindScene(s) {
     stage.classList.remove('hovering');
     tip.classList.add('hidden');
   };
+}
+
+function personaTip(img) {
+  const p = S.players[Number(img.dataset.seat)];
+  const isDealer = img.classList.contains('croupier');
+  return `<div class="nm" style="color:${col(p.color, '#fff')}">${esc(p.name)} <span>${esc(p.title ?? '')}${isDealer ? ' · 今晚的荷官' : ''}</span></div><div class="md">${esc(p.model ?? '')}</div>${p.persona ? `<div class="ps">${esc(p.persona)}</div>` : ''}`;
 }
 
 // Make the cast cards as large as the window allows: try 1–3 rows and keep the biggest card size.
