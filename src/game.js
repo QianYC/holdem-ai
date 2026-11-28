@@ -819,8 +819,12 @@ export class Game extends EventEmitter {
     this.autoNextAt = null;
     let ms = this.spectating ? (this.spectatePaused ? 0 : (this.config.spectateDelayMs ?? 3000)) : (this.config.autoNextHandMs ?? 0);
     if (!ms || this.status !== 'handOver' || (!this.spectating && !this.table.players.some((p) => p.kind === 'human' && p.stack > 0 && !p.sittingOut))) return;
-    // Leave time to read a defeat screen before the next hand starts.
-    if (this.knockouts.length) ms = Math.max(ms, (this.config.knockoutDelayMs ?? 12000) + (this.knockouts.length - 1) * 5000);
+    // Leave time to read a defeat screen before the next hand starts; while a parting line is still being
+    // written, wait for it (up to knockoutWaitMs) — it reschedules when it arrives.
+    if (this.knockouts.length) {
+      ms = Math.max(ms, (this.config.knockoutDelayMs ?? 12000) + (this.knockouts.length - 1) * 5000);
+      if (this.knockouts.some((k) => !k.line)) ms = Math.max(ms, this.config.knockoutWaitMs ?? 40000);
+    }
     const no = this.table.handNo;
     this.autoNextAt = Date.now() + ms;
     this.autoTimer = setTimeout(() => {
@@ -1059,8 +1063,11 @@ export class Game extends EventEmitter {
         this.trimTalk();
       }
       this.save();
-      if (!this.knockouts.includes(k)) return;
+      // Announced even if the next hand already started (Slack posts it late rather than never).
       this.emit('knockout', k);
+      if (!this.knockouts.includes(k)) return;
+      // The screen now has its line: give everyone the normal reading time from here.
+      if (this.status === 'handOver' && this.autoNextAt && this.knockouts.every((x) => x.line)) this.scheduleAutoNext();
       this.changed();
     });
   }

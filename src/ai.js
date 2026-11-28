@@ -433,6 +433,16 @@ async function runTool(run, name, args, used) {
 
 // Anthropic Messages version of the tool loop (tool_use / tool_result blocks; thinking blocks are passed back as-is).
 // Without `run` it is a single plain request.
+// Messages API thinking: short lines (sideline, end-screen lines) never think; decisions follow the
+// character's reasoning setting: off / low (1k tokens) / medium (4k) / high or unset (the model's default).
+function messagesThinking(player) {
+  const effort = ['sideline', 'lines', 'quick'].includes(player.purpose) ? 'off' : player.reasoning;
+  if (effort === 'off' || effort === 'none') return { thinking: { type: 'disabled' } };
+  if (effort === 'low') return { thinking: { type: 'enabled', budget_tokens: 1024 } };
+  if (effort === 'medium') return { thinking: { type: 'enabled', budget_tokens: 4096 } };
+  return {};
+}
+
 async function messagesLoop(cfg, route, player, prompt, tableSize, run, { maxRounds = 5, deadline } = {}) {
   const messages = [{ role: 'user', content: prompt }];
   const used = [];
@@ -447,6 +457,7 @@ async function messagesLoop(cfg, route, player, prompt, tableSize, run, { maxRou
         system: systemPrompt(player, tableSize),
         messages,
         max_tokens: Math.max(2000, player.maxOutputTokens ?? cfg.maxOutputTokens ?? 4000),
+        ...messagesThinking(player),
         // Tools must stay defined while the history holds tool_use blocks; the last round forbids calling them.
         ...(tools ? { tools, tool_choice: { type: round === maxRounds - 1 ? 'none' : 'auto' } } : {}),
       },
@@ -483,7 +494,7 @@ async function askWithTools(cfg, player, prompt, tableSize, run, { maxRounds = 5
         tool_choice: round === maxRounds - 1 ? 'none' : 'auto',
         max_output_tokens: player.maxOutputTokens ?? cfg.maxOutputTokens ?? 1500,
         stream: false,
-        ...(player.reasoning ? { reasoning: { effort: player.reasoning } } : {}),
+        ...(player.reasoning && player.reasoning !== 'off' ? { reasoning: { effort: player.reasoning } } : {}),
       },
       deadline,
     );
@@ -533,7 +544,7 @@ export async function askModel(cfg, player, prompt, tableSize, { deadline } = {}
     input: prompt,
     max_output_tokens: player.maxOutputTokens ?? cfg.maxOutputTokens ?? 1500,
     stream: false,
-    ...(player.reasoning ? { reasoning: { effort: player.reasoning } } : {}),
+    ...(player.reasoning && player.reasoning !== 'off' ? { reasoning: { effort: player.reasoning } } : {}),
   };
   return parseAnswer(outputText(await callRoute(cfg, route, player, body, deadline)));
 }

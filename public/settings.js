@@ -151,7 +151,7 @@ function aiCard(a, i) {
       ${field('', `ai.${i}.avatar`, { attrs: 'class="emo" maxlength="4" title="没有立绘时的头像"' })}
       ${field('名字', `ai.${i}.name`)}
       ${modelSelect('模型', `ai.${i}.model`, { withProviders: true })}
-      ${select('推理', `ai.${i}.reasoning`, [['', '默认'], ['low', 'low'], ['medium', 'medium'], ['high', 'high']])}
+      ${select('推理', `ai.${i}.reasoning`, [['', '默认'], ['off', '关闭思考'], ['low', 'low'], ['medium', 'medium'], ['high', 'high']])}
       ${field('颜色', `ai.${i}.color`, { type: 'color' })}
       <div class="aibtns">
         <button type="button" data-move="-1" ${i === 0 ? 'disabled' : ''} title="上移">↑</button>

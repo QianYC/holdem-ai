@@ -216,7 +216,8 @@
         "win": "She happily holds up a big bowl of white rice like a trophy, whale tail wagging, a pile of poker chips beside her, a satisfied sleepy-cat smile.",
         "lose": "She sits on the floor hugging an empty rice bowl, whale tail drooping, apron rumpled, pouting with teary eyes as if saying \"at this point, let us just eat\".",
         "seat": "Her black-and-white maid dress with a white apron and a small whale hairpin. She rests her chin on the table edge pose with a lazy, sleepy smile, a small bowl of white rice next to her cards, whale tail curling behind her chair."
-      }
+      },
+      "reasoning": "low"
     },
     {
       "key": "dsflash",
